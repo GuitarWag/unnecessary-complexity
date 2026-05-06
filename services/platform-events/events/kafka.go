@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 	"google.golang.org/protobuf/proto"
@@ -30,6 +31,10 @@ func NewKafkaPublisher(brokers []string) *KafkaPublisher {
 			RequiredAcks:           kafka.RequireAll,
 			AllowAutoTopicCreation: true,
 			Async:                  false,
+			// kafka-go defaults BatchSize=100 and BatchTimeout=1s. With single-message
+			// synchronous publishes, every call paid the full 1s waiting for a batch.
+			BatchSize:    1,
+			BatchTimeout: 10 * time.Millisecond,
 		},
 	}
 }

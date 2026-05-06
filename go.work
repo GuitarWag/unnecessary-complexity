@@ -1,0 +1,11 @@
+go 1.26
+
+use (
+	./services/analytics
+	./services/gateway
+	./services/platform-events
+	./services/proto
+	./services/resolver
+	./services/shortener
+	./tests/integration
+)

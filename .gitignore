@@ -1,0 +1,16 @@
+/services/**/bin/
+/services/**/*.test
+/services/**/*.out
+*.db
+*.sqlite
+*.sqlite-journal
+.DS_Store
+node_modules/
+dist/
+.env
+.env.local
+go.work.sum
+.run/
+.claude/
+.claude-flow/
+.swarm/

@@ -1,0 +1,45 @@
+run:
+  timeout: 3m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - revive
+    - bodyclose
+    - errorlint
+    - gosec
+    - nilerr
+    - unconvert
+    - unparam
+    - whitespace
+
+linters-settings:
+  goimports:
+    local-prefixes: github.com/yld/url-shortener
+  revive:
+    rules:
+      - name: var-naming
+      - name: exported
+        disabled: false
+      - name: error-return
+      - name: error-naming
+      - name: if-return
+      - name: indent-error-flow
+      - name: unused-parameter
+        disabled: true
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - errcheck

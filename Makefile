@@ -155,7 +155,7 @@ integration-test-only:
 
 # ----- Load tests (k6) -----
 
-LOAD_GATEWAY    ?= http://localhost:18080
+LOAD_GATEWAY    ?= http://localhost:8080
 LOAD_SEED_COUNT ?= 500
 LOAD_DURATION   ?= 30s
 
@@ -188,3 +188,7 @@ load-test-mixed:
 		--env DURATION=$(LOAD_DURATION) \
 		--env SCENARIO=mixed \
 		tests/load/k6.js
+
+.PHONY: load-sweep
+load-sweep:
+	GATEWAY=$(LOAD_GATEWAY) DURATION=$(LOAD_DURATION) SEED_COUNT=$(LOAD_SEED_COUNT) ./scripts/load-sweep.sh

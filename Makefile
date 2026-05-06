@@ -152,3 +152,39 @@ integration-test-only:
 		echo "INTEGRATION_GATEWAY_URL not set; pointing at http://localhost:18080"; \
 	fi
 	cd tests/integration && go test -v -tags=integration -count=1 -timeout=10m ./...
+
+# ----- Load tests (k6) -----
+
+LOAD_GATEWAY    ?= http://localhost:18080
+LOAD_SEED_COUNT ?= 500
+LOAD_DURATION   ?= 30s
+
+.PHONY: load-test load-test-read load-test-write load-test-mixed
+
+load-test: load-test-mixed
+
+load-test-read:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 not found; install with: brew install k6"; exit 1; }
+	k6 run \
+		--env GATEWAY=$(LOAD_GATEWAY) \
+		--env SEED_COUNT=$(LOAD_SEED_COUNT) \
+		--env DURATION=$(LOAD_DURATION) \
+		--env SCENARIO=read \
+		tests/load/k6.js
+
+load-test-write:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 not found; install with: brew install k6"; exit 1; }
+	k6 run \
+		--env GATEWAY=$(LOAD_GATEWAY) \
+		--env DURATION=$(LOAD_DURATION) \
+		--env SCENARIO=write \
+		tests/load/k6.js
+
+load-test-mixed:
+	@command -v k6 >/dev/null 2>&1 || { echo "k6 not found; install with: brew install k6"; exit 1; }
+	k6 run \
+		--env GATEWAY=$(LOAD_GATEWAY) \
+		--env SEED_COUNT=$(LOAD_SEED_COUNT) \
+		--env DURATION=$(LOAD_DURATION) \
+		--env SCENARIO=mixed \
+		tests/load/k6.js

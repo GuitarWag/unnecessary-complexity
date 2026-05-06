@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package shortener.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/yld/url-shortener/services/proto/gen/shortener/v1;shortenerv1";
+
+// ShortenerService is the write-side API for short URLs.
+service ShortenerService {
+  // Shorten creates a short code for a long URL. Idempotent on long_url:
+  // submitting the same long_url twice returns the existing code.
+  rpc Shorten(ShortenRequest) returns (ShortenResponse);
+
+  // Get returns the mapping for a code.
+  rpc Get(GetRequest) returns (GetResponse);
+}
+
+message ShortenRequest {
+  string long_url = 1;
+  // Optional opaque idempotency key. Two requests from the same owner_id with the same
+  // non-empty key are guaranteed to return the same code. Empty key disables dedup.
+  string idempotency_key = 2;
+  // Optional owner identifier. Scopes idempotency_key uniqueness so users can't collide.
+  // Empty owner_id is treated as a single shared namespace.
+  string owner_id = 3;
+}
+
+message ShortenResponse {
+  ShortURL url = 1;
+  bool created = 2;  // false if an existing code was returned.
+}
+
+message GetRequest {
+  string code = 1;
+}
+
+message GetResponse {
+  ShortURL url = 1;
+}
+
+message ShortURL {
+  string code = 1;
+  string long_url = 2;
+  google.protobuf.Timestamp created_at = 3;
+}

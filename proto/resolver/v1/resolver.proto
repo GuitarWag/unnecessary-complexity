@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package resolver.v1;
+
+service ResolverService {
+  // Resolve returns the long URL for a given code and emits a ClickRecorded event asynchronously.
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
+}
+
+message ResolveRequest {
+  string code = 1;
+  string user_agent = 2;
+  string referer = 3;
+  string ip = 4;
+}
+
+message ResolveResponse {
+  string long_url = 1;
+}
+
+option go_package = "github.com/yld/url-shortener/services/proto/gen/resolver/v1;resolverv1";

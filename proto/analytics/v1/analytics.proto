@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package analytics.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/yld/url-shortener/services/proto/gen/analytics/v1;analyticsv1";
+
+service AnalyticsService {
+  // Stats returns aggregated click stats for a code.
+  rpc Stats(StatsRequest) returns (StatsResponse);
+}
+
+message StatsRequest {
+  string code = 1;
+  // Inclusive ISO date string YYYY-MM-DD; empty means "no lower bound".
+  string from_date = 2;
+  // Inclusive ISO date string YYYY-MM-DD; empty means "no upper bound".
+  string to_date = 3;
+}
+
+message StatsResponse {
+  string code = 1;
+  int64 total = 2;
+  google.protobuf.Timestamp last_clicked_at = 3;
+  repeated DailyCount daily = 4;
+}
+
+message DailyCount {
+  // Date in YYYY-MM-DD (UTC).
+  string date = 1;
+  int64 count = 2;
+}

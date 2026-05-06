@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package events.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/yld/url-shortener/services/proto/gen/events/v1;eventsv1";
+
+// ShortURLCreated is emitted by shortener-svc whenever a new short URL is persisted.
+// Topic: short_urls.created
+message ShortURLCreated {
+  string code = 1;
+  string long_url = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+// ClickRecorded is emitted by resolver-svc on every successful resolve.
+// Topic: clicks.recorded
+message ClickRecorded {
+  string code = 1;
+  google.protobuf.Timestamp clicked_at = 2;
+  string user_agent = 3;
+  string referer = 4;
+  string ip = 5;
+}

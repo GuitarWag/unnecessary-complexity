@@ -1,0 +1,63 @@
+# Path-based ingress. Each microfrontend is served under /mf/<name>/ via a rewrite,
+# and the gateway is exposed at /api. The shell is the catch-all.
+#
+# IMPORTANT: For Module Federation to load remote chunks correctly, each MF must be
+# *built* with assetPrefix matching its public path. Until that is wired up, prefer
+# host-based routing (one host per MF) so each remote serves at its own root.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: url-shortener
+  namespace: url-shortener
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+spec:
+  rules:
+    - host: url-shortener.local
+      http:
+        paths:
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: gateway
+                port: { number: 8080 }
+          - path: /mf/url-input(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: mf-url-input
+                port: { number: 80 }
+          - path: /mf/create-button(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: mf-create-button
+                port: { number: 80 }
+          - path: /mf/copy-button(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: mf-copy-button
+                port: { number: 80 }
+          - path: /mf/url-list(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: mf-url-list
+                port: { number: 80 }
+          - path: /mf/analytics-chart(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: mf-analytics-chart
+                port: { number: 80 }
+          - path: /()(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: shell
+                port: { number: 80 }

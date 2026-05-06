@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: url-shortener
+  labels: { app: gateway }
+spec:
+  selector: { app: gateway }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: url-shortener
+  labels: { app: gateway }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: gateway }
+  template:
+    metadata:
+      labels: { app: gateway }
+    spec:
+      containers:
+        - name: server
+          image: url-shortener/gateway:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: GATEWAY_ADDR
+              value: ":8080"
+            - name: GATEWAY_SHORTENER_ADDR
+              value: "shortener.url-shortener.svc.cluster.local:50051"
+            - name: GATEWAY_RESOLVER_ADDR
+              value: "resolver.url-shortener.svc.cluster.local:50052"
+            - name: GATEWAY_ANALYTICS_ADDR
+              value: "analytics.url-shortener.svc.cluster.local:50053"
+            - name: GATEWAY_ALLOWED_ORIGINS
+              value: "http://localhost,http://shell.local,http://localhost:5173"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20

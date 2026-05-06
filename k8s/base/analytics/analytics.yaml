@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: analytics-data
+  namespace: url-shortener
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics
+  namespace: url-shortener
+  labels: { app: analytics }
+spec:
+  selector: { app: analytics }
+  ports:
+    - name: grpc
+      port: 50053
+      targetPort: 50053
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics
+  namespace: url-shortener
+  labels: { app: analytics }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: analytics }
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels: { app: analytics }
+    spec:
+      containers:
+        - name: server
+          image: url-shortener/analytics:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 50053
+              name: grpc
+          env:
+            - name: ANALYTICS_ADDR
+              value: ":50053"
+            - name: ANALYTICS_DB
+              value: "/data/analytics.db"
+            - name: ANALYTICS_KAFKA_BROKERS
+              value: "kafka-0.kafka.url-shortener.svc.cluster.local:9092"
+            - name: ANALYTICS_KAFKA_GROUP_ID
+              value: "analytics-svc"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket: { port: 50053 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 50053 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: analytics-data

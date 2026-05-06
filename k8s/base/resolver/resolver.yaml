@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: resolver-data
+  namespace: url-shortener
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: resolver
+  namespace: url-shortener
+  labels: { app: resolver }
+spec:
+  selector: { app: resolver }
+  ports:
+    - name: grpc
+      port: 50052
+      targetPort: 50052
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resolver
+  namespace: url-shortener
+  labels: { app: resolver }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: resolver }
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels: { app: resolver }
+    spec:
+      containers:
+        - name: server
+          image: url-shortener/resolver:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 50052
+              name: grpc
+          env:
+            - name: RESOLVER_ADDR
+              value: ":50052"
+            - name: RESOLVER_DB
+              value: "/data/resolver.db"
+            - name: RESOLVER_KAFKA_BROKERS
+              value: "kafka-0.kafka.url-shortener.svc.cluster.local:9092"
+            - name: RESOLVER_KAFKA_GROUP_ID
+              value: "resolver-svc"
+            - name: RESOLVER_KAFKA_START
+              value: "first"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket: { port: 50052 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 50052 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: resolver-data

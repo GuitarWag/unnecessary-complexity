@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shortener-data
+  namespace: url-shortener
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shortener
+  namespace: url-shortener
+  labels: { app: shortener }
+spec:
+  selector: { app: shortener }
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shortener
+  namespace: url-shortener
+  labels: { app: shortener }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: shortener }
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels: { app: shortener }
+    spec:
+      containers:
+        - name: server
+          image: url-shortener/shortener:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 50051
+              name: grpc
+          env:
+            - name: SHORTENER_ADDR
+              value: ":50051"
+            - name: SHORTENER_DB
+              value: "/data/shortener.db"
+            - name: SHORTENER_KAFKA_BROKERS
+              value: "kafka-0.kafka.url-shortener.svc.cluster.local:9092"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket: { port: 50051 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 50051 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: shortener-data

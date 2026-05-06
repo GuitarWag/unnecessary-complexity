@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["@testing-library/jest-dom", "vitest/globals"],
+    "paths": {
+      "@url-shortener/proto-web": ["../../packages/proto-web/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "rsbuild.config.ts", "vitest.config.ts"]
+}

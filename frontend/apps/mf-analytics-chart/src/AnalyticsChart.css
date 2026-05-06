@@ -1,0 +1,67 @@
+.analytics-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  background: var(--bg-elev, #111c33);
+  border: 1px solid var(--border, #243352);
+  border-radius: 14px;
+}
+
+.analytics-chart h3 {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 2rem;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.analytics-chart__last {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-dim, #64748b);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.analytics-chart svg {
+  max-width: 100%;
+  height: auto;
+  align-self: flex-start;
+}
+
+.analytics-chart svg rect {
+  fill: var(--accent, #22c55e);
+  opacity: 0.85;
+  transition: opacity 200ms ease;
+}
+
+.analytics-chart svg rect:hover {
+  opacity: 1;
+}
+
+.analytics-chart table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.analytics-chart thead th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border, #243352);
+  color: var(--text-muted, #94a3b8);
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 500;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.analytics-chart tbody td {
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border, #243352);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.analytics-chart tbody tr:last-child td {
+  border-bottom: none;
+}

@@ -1,0 +1,30 @@
+{
+  "name": "@url-shortener/proto-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./shortener": "./src/gen/shortener/v1/shortener_pb.ts",
+    "./resolver": "./src/gen/resolver/v1/resolver_pb.ts",
+    "./analytics": "./src/gen/analytics/v1/analytics_pb.ts",
+    "./events": "./src/gen/events/v1/events_pb.ts"
+  },
+  "scripts": {
+    "generate": "rm -rf src/gen && buf generate ../../../proto --template buf.gen.web.yaml",
+    "test": "vitest run",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.2.2",
+    "@connectrpc/connect": "2.0.0-rc.3",
+    "@connectrpc/connect-web": "2.0.0-rc.3"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "1.47.2",
+    "@bufbuild/protoc-gen-es": "2.2.2",
+    "typescript": "5.6.3",
+    "vitest": "2.1.8"
+  }
+}

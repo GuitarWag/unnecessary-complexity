@@ -8,6 +8,7 @@ import (
 	"golang.org/x/net/http2/h2c"
 
 	"github.com/yld/url-shortener/services/proto/gen/analytics/v1/analyticsv1connect"
+	"github.com/yld/url-shortener/services/proto/gen/loadgen/v1/loadgenv1connect"
 	"github.com/yld/url-shortener/services/proto/gen/resolver/v1/resolverv1connect"
 	"github.com/yld/url-shortener/services/proto/gen/shortener/v1/shortenerv1connect"
 )
@@ -17,6 +18,8 @@ type Router struct {
 	Shortener *ShortenerHandler
 	Resolver  *ResolverHandler
 	Analytics *AnalyticsHandler
+	// LoadGen is optional; nil disables the load-test surface.
+	LoadGen *LoadGenHandler
 	// Redirect serves GET /<code> as a 302 to the long URL. May be nil to disable.
 	Redirect *RedirectHandler
 	// AllowedOrigins controls CORS. Empty list disables CORS entirely.
@@ -31,6 +34,9 @@ func (r Router) Build() http.Handler {
 	mux.Handle(shortenerv1connect.NewShortenerServiceHandler(r.Shortener))
 	mux.Handle(resolverv1connect.NewResolverServiceHandler(r.Resolver))
 	mux.Handle(analyticsv1connect.NewAnalyticsServiceHandler(r.Analytics))
+	if r.LoadGen != nil {
+		mux.Handle(loadgenv1connect.NewLoadGenServiceHandler(r.LoadGen))
+	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

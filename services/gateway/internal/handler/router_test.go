@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	loadgenv1 "github.com/yld/url-shortener/services/proto/gen/loadgen/v1"
+	"github.com/yld/url-shortener/services/proto/gen/loadgen/v1/loadgenv1connect"
 	shortenerv1 "github.com/yld/url-shortener/services/proto/gen/shortener/v1"
 	"github.com/yld/url-shortener/services/proto/gen/shortener/v1/shortenerv1connect"
 )
@@ -21,6 +23,18 @@ func newTestRouter(t *testing.T, shortener ShortenerClient, resolver ResolverCli
 		Shortener:      NewShortenerHandler(shortener),
 		Resolver:       NewResolverHandler(resolver),
 		Analytics:      NewAnalyticsHandler(analytics),
+		AllowedOrigins: []string{"http://localhost:5173"},
+	}
+	return r.Build()
+}
+
+func newTestRouterWithLoadGen(t *testing.T, loadgen LoadGenClient) http.Handler {
+	t.Helper()
+	r := Router{
+		Shortener:      NewShortenerHandler(&fakeShortener{}),
+		Resolver:       NewResolverHandler(&fakeResolver{}),
+		Analytics:      NewAnalyticsHandler(&fakeAnalytics{}),
+		LoadGen:        NewLoadGenHandler(loadgen),
 		AllowedOrigins: []string{"http://localhost:5173"},
 	}
 	return r.Build()
@@ -78,6 +92,37 @@ func TestRouter_CORSPreflight(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 	assert.Equal(t, "http://localhost:5173", resp.Header.Get("Access-Control-Allow-Origin"))
+}
+
+func TestRouter_LoadGenStreamForwardsSamples(t *testing.T) {
+	t.Parallel()
+
+	upstream := &fakeLoadGen{
+		stream: &fakeLoadGenStream{
+			samples: []*loadgenv1.LoadTestSample{
+				{Status: loadgenv1.Status_RUNNING, ElapsedSeconds: 1, CurrentRps: 50},
+				{Status: loadgenv1.Status_COMPLETED, ElapsedSeconds: 2, TotalRequests: 100},
+			},
+		},
+	}
+	srv := httptest.NewServer(newTestRouterWithLoadGen(t, upstream))
+	defer srv.Close()
+
+	client := loadgenv1connect.NewLoadGenServiceClient(srv.Client(), srv.URL)
+	stream, err := client.RunLoadTest(context.Background(), connect.NewRequest(&loadgenv1.LoadTestRequest{
+		Preset: loadgenv1.Preset_LOW,
+	}))
+	require.NoError(t, err)
+
+	var collected []*loadgenv1.LoadTestSample
+	for stream.Receive() {
+		collected = append(collected, stream.Msg())
+	}
+	require.NoError(t, stream.Err())
+
+	require.Len(t, collected, 2)
+	assert.Equal(t, loadgenv1.Status_COMPLETED, collected[1].GetStatus())
+	assert.Equal(t, uint64(100), collected[1].GetTotalRequests())
 }
 
 func TestRouter_CORSDisallowedOriginNoHeader(t *testing.T) {

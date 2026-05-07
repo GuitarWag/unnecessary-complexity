@@ -18,6 +18,7 @@ import (
 
 	"github.com/yld/url-shortener/services/gateway/internal/handler"
 	analyticsv1 "github.com/yld/url-shortener/services/proto/gen/analytics/v1"
+	loadgenv1 "github.com/yld/url-shortener/services/proto/gen/loadgen/v1"
 	resolverv1 "github.com/yld/url-shortener/services/proto/gen/resolver/v1"
 	shortenerv1 "github.com/yld/url-shortener/services/proto/gen/shortener/v1"
 )
@@ -34,6 +35,7 @@ type config struct {
 	shortenerAddr  string
 	resolverAddr   string
 	analyticsAddr  string
+	loadgenAddr    string
 	allowedOrigins []string
 	shutdownDur    time.Duration
 }
@@ -44,6 +46,7 @@ func loadConfig() config {
 		shortenerAddr:  envDefault("GATEWAY_SHORTENER_ADDR", "localhost:50051"),
 		resolverAddr:   envDefault("GATEWAY_RESOLVER_ADDR", "localhost:50052"),
 		analyticsAddr:  envDefault("GATEWAY_ANALYTICS_ADDR", "localhost:50053"),
+		loadgenAddr:    envDefault("GATEWAY_LOADGEN_ADDR", "localhost:50054"),
 		allowedOrigins: envList("GATEWAY_ALLOWED_ORIGINS"),
 		shutdownDur:    10 * time.Second,
 	}
@@ -98,11 +101,18 @@ func run() error {
 	}
 	defer func() { _ = analyticsConn.Close() }()
 
+	loadgenConn, err := grpc.NewClient(cfg.loadgenAddr, dialOpts...)
+	if err != nil {
+		return fmt.Errorf("dial loadgen: %w", err)
+	}
+	defer func() { _ = loadgenConn.Close() }()
+
 	resolverClient := resolverv1.NewResolverServiceClient(resolverConn)
 	router := handler.Router{
 		Shortener:      handler.NewShortenerHandler(shortenerv1.NewShortenerServiceClient(shortenerConn)),
 		Resolver:       handler.NewResolverHandler(resolverClient),
 		Analytics:      handler.NewAnalyticsHandler(analyticsv1.NewAnalyticsServiceClient(analyticsConn)),
+		LoadGen:        handler.NewLoadGenHandler(loadgenv1.NewLoadGenServiceClient(loadgenConn)),
 		Redirect:       handler.NewRedirectHandler(resolverClient),
 		AllowedOrigins: cfg.allowedOrigins,
 	}
@@ -123,6 +133,7 @@ func run() error {
 			"shortener", cfg.shortenerAddr,
 			"resolver", cfg.resolverAddr,
 			"analytics", cfg.analyticsAddr,
+			"loadgen", cfg.loadgenAddr,
 			"allowed_origins", cfg.allowedOrigins,
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

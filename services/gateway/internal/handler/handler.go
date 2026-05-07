@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"connectrpc.com/connect"
 	"google.golang.org/grpc"
@@ -12,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	analyticsv1 "github.com/yld/url-shortener/services/proto/gen/analytics/v1"
+	loadgenv1 "github.com/yld/url-shortener/services/proto/gen/loadgen/v1"
 	resolverv1 "github.com/yld/url-shortener/services/proto/gen/resolver/v1"
 	shortenerv1 "github.com/yld/url-shortener/services/proto/gen/shortener/v1"
 )
@@ -90,6 +92,42 @@ func (h *AnalyticsHandler) Stats(ctx context.Context, req *connect.Request[analy
 		return nil, toConnectErr(err)
 	}
 	return connect.NewResponse(resp), nil
+}
+
+// LoadGenClient is the slice of loadgenv1.LoadGenServiceClient used by the handler.
+type LoadGenClient interface {
+	RunLoadTest(ctx context.Context, in *loadgenv1.LoadTestRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[loadgenv1.LoadTestSample], error)
+}
+
+// LoadGenHandler implements the Connect LoadGenServiceHandler. It bridges the
+// gRPC server-streaming upstream to a Connect server-streaming response.
+type LoadGenHandler struct {
+	client LoadGenClient
+}
+
+// NewLoadGenHandler constructs a LoadGenHandler.
+func NewLoadGenHandler(c LoadGenClient) *LoadGenHandler { return &LoadGenHandler{client: c} }
+
+// RunLoadTest opens a stream against the upstream loadgen service and forwards
+// samples to the Connect client. Returns when the upstream stream ends, the
+// caller's context is cancelled, or sending to the Connect stream fails.
+func (h *LoadGenHandler) RunLoadTest(ctx context.Context, req *connect.Request[loadgenv1.LoadTestRequest], stream *connect.ServerStream[loadgenv1.LoadTestSample]) error {
+	upstream, err := h.client.RunLoadTest(ctx, req.Msg)
+	if err != nil {
+		return toConnectErr(err)
+	}
+	for {
+		sample, err := upstream.Recv()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return toConnectErr(err)
+		}
+		if err := stream.Send(sample); err != nil {
+			return err
+		}
+	}
 }
 
 // toConnectErr converts a gRPC error to a Connect error preserving status code where possible.

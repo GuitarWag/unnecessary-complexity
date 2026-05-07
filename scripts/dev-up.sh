@@ -117,6 +117,7 @@ start shortener env \
 
 start resolver env \
   RESOLVER_ADDR=:50052 \
+  RESOLVER_HTTP_ADDR=:50080 \
   RESOLVER_DB="$DATA/resolver.db" \
   RESOLVER_KAFKA_BROKERS=localhost:9092 \
   "$BIN/resolver"

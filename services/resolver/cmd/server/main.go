@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	eventsv1 "github.com/yld/url-shortener/services/proto/gen/events/v1"
 	resolverv1 "github.com/yld/url-shortener/services/proto/gen/resolver/v1"
 	"github.com/yld/url-shortener/services/resolver/internal/consumer"
+	"github.com/yld/url-shortener/services/resolver/internal/httpserver"
 	"github.com/yld/url-shortener/services/resolver/internal/repo"
 	"github.com/yld/url-shortener/services/resolver/internal/service"
 )
@@ -38,6 +40,7 @@ func main() {
 
 type config struct {
 	addr          string
+	httpAddr      string
 	dbPath        string
 	kafkaBrokers  []string
 	kafkaGroupID  string
@@ -48,6 +51,7 @@ type config struct {
 func loadConfig() config {
 	return config{
 		addr:          envDefault("RESOLVER_ADDR", ":50052"),
+		httpAddr:      envDefault("RESOLVER_HTTP_ADDR", ""),
 		dbPath:        envDefault("RESOLVER_DB", "resolver.db"),
 		kafkaBrokers:  envList("RESOLVER_KAFKA_BROKERS"),
 		kafkaGroupID:  envDefault("RESOLVER_KAFKA_GROUP_ID", "resolver-svc"),
@@ -160,6 +164,23 @@ func run() error {
 		close(serveErr)
 	}()
 
+	var httpSrv *http.Server
+	httpErr := make(chan error, 1)
+	if cfg.httpAddr != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/", httpserver.NewRedirectHandler(srv))
+		httpSrv = &http.Server{Addr: cfg.httpAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		go func() {
+			logger.Info("resolver HTTP redirect listening", "addr", cfg.httpAddr)
+			if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				httpErr <- err
+			}
+			close(httpErr)
+		}()
+	} else {
+		close(httpErr)
+	}
+
 	select {
 	case <-ctx.Done():
 		logger.Info("shutdown signal received")
@@ -168,6 +189,10 @@ func run() error {
 			return fmt.Errorf("grpc serve: %w", err)
 		}
 		return nil
+	case err := <-httpErr:
+		if err != nil {
+			return fmt.Errorf("http serve: %w", err)
+		}
 	case err := <-consumerErr:
 		if err != nil {
 			return fmt.Errorf("kafka consumer: %w", err)
@@ -176,6 +201,11 @@ func run() error {
 
 	stopped := make(chan struct{})
 	go func() {
+		if httpSrv != nil {
+			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.shutdownDur)
+			_ = httpSrv.Shutdown(shutdownCtx)
+			cancelShutdown()
+		}
 		gsrv.GracefulStop()
 		srv.Wait()
 		close(stopped)

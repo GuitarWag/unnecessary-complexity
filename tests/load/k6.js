@@ -2,6 +2,9 @@ import http from 'k6/http';
 import { check } from 'k6';
 
 const GATEWAY = __ENV.GATEWAY || 'http://localhost:18080';
+// Optional: point read traffic at the resolver's direct HTTP redirect listener,
+// bypassing the gateway hop. Writes still go through the gateway.
+const READ_TARGET = __ENV.READ_TARGET || GATEWAY;
 const SCENARIO = __ENV.SCENARIO || 'read';
 const SEED_COUNT = parseInt(__ENV.SEED_COUNT || '500', 10);
 const READ_RATE = parseInt(__ENV.READ_RATE || '5000', 10);
@@ -81,11 +84,11 @@ export function setup() {
   console.log(`seeded ${codes.length} codes; first=${codes[0]} last=${codes[codes.length - 1]}`);
 
   // Wait for the resolver to catch up via Kafka before we start hammering reads.
-  // Poll the *last* seeded code (worst case for propagation) until the gateway 302s.
+  // Poll the *last* seeded code (worst case for propagation) against READ_TARGET.
   const propagationDeadline = Date.now() + 30000;
   let ready = false;
   while (Date.now() < propagationDeadline) {
-    const probe = http.get(`${GATEWAY}/${codes[codes.length - 1]}`, { redirects: 0 });
+    const probe = http.get(`${READ_TARGET}/${codes[codes.length - 1]}`, { redirects: 0 });
     if (probe.status === 302) {
       ready = true;
       break;
@@ -100,7 +103,7 @@ export function setup() {
 
 export function readStorm(data) {
   const code = data.codes[Math.floor(Math.random() * data.codes.length)];
-  const res = http.get(`${GATEWAY}/${code}`, { redirects: 0 });
+  const res = http.get(`${READ_TARGET}/${code}`, { redirects: 0 });
   check(res, { 'redirect 302': (r) => r.status === 302 });
 }
 

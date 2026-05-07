@@ -9,7 +9,7 @@ PROTOC_GEN_GO_VERSION   := v1.35.2
 PROTOC_GEN_GRPC_VERSION := v1.5.1
 GOLANGCI_LINT_VERSION   := v1.64.8
 
-GO_SERVICES   := shortener resolver analytics gateway
+GO_SERVICES   := shortener resolver analytics gateway loadgen
 GO_LIBS       := platform-events
 GO_MODULES    := $(GO_SERVICES) $(GO_LIBS)
 
@@ -78,8 +78,8 @@ ci: proto-lint lint test build
 
 DOCKER_TAG       ?= dev
 DOCKER_REGISTRY  ?= url-shortener
-GO_IMAGES        := shortener resolver analytics gateway
-FE_IMAGES        := shell mf-url-input mf-create-button mf-copy-button mf-url-list mf-analytics-chart
+GO_IMAGES        := shortener resolver analytics gateway loadgen
+FE_IMAGES        := shell mf-url-input mf-create-button mf-copy-button mf-url-list mf-analytics-chart mf-load-test
 
 .PHONY: docker-build
 docker-build: docker-build-go docker-build-fe

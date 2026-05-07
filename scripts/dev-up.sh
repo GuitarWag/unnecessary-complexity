@@ -104,7 +104,7 @@ fi
 
 # 2) Build Go binaries
 log "building Go services"
-for svc in shortener resolver analytics gateway; do
+for svc in shortener resolver analytics gateway loadgen; do
   (cd "$ROOT/services/$svc" && go build -o "$BIN/$svc" ./cmd/server)
 done
 
@@ -134,12 +134,21 @@ wait_tcp localhost 50051 "shortener gRPC" 30
 wait_tcp localhost 50052 "resolver gRPC" 30
 wait_tcp localhost 50053 "analytics gRPC" 30
 
+start loadgen env \
+  LOADGEN_ADDR=:50054 \
+  LOADGEN_TARGET=http://localhost:8080 \
+  LOADGEN_RESOLVER_TARGET=http://localhost:50080 \
+  "$BIN/loadgen"
+
+wait_tcp localhost 50054 "loadgen gRPC" 30
+
 start gateway env \
   GATEWAY_ADDR=:8080 \
   GATEWAY_SHORTENER_ADDR=localhost:50051 \
   GATEWAY_RESOLVER_ADDR=localhost:50052 \
   GATEWAY_ANALYTICS_ADDR=localhost:50053 \
-  GATEWAY_ALLOWED_ORIGINS="http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176,http://localhost:5177,http://localhost:5178" \
+  GATEWAY_LOADGEN_ADDR=localhost:50054 \
+  GATEWAY_ALLOWED_ORIGINS="http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176,http://localhost:5177,http://localhost:5178,http://localhost:5179" \
   "$BIN/gateway"
 
 wait_http_ok "http://localhost:8080/healthz" "gateway" 30
@@ -152,7 +161,7 @@ if [[ -z "${SKIP_FRONTEND:-}" ]]; then
   if [[ -n "${MINIMAL_FRONTEND:-}" ]]; then
     apps=(shell mf-url-input)
   else
-    apps=(shell mf-url-input mf-create-button mf-copy-button mf-url-list mf-analytics-chart)
+    apps=(shell mf-url-input mf-create-button mf-copy-button mf-url-list mf-analytics-chart mf-load-test)
   fi
 
   for app in "${apps[@]}"; do

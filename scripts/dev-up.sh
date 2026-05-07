@@ -113,6 +113,8 @@ start shortener env \
   SHORTENER_ADDR=:50051 \
   SHORTENER_DB="$DATA/shortener.db" \
   SHORTENER_KAFKA_BROKERS=localhost:9092 \
+  SHORTENER_BATCH_SIZE="${SHORTENER_BATCH_SIZE:-100}" \
+  SHORTENER_BATCH_TIMEOUT="${SHORTENER_BATCH_TIMEOUT:-10ms}" \
   "$BIN/shortener"
 
 start resolver env \

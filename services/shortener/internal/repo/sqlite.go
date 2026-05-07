@@ -114,17 +114,74 @@ func (r *Repository) Insert(ctx context.Context, row ShortURL) error {
 		`INSERT INTO short_urls(code, long_url, owner_id, idempotency_key, created_at) VALUES(?, ?, ?, ?, ?)`,
 		row.Code, row.LongURL, row.OwnerID, key, row.CreatedAt.UTC(),
 	)
-	if err != nil {
-		var sqlErr sqlite3.Error
-		if errors.As(err, &sqlErr) && sqlErr.ExtendedCode == sqlite3.ErrConstraintPrimaryKey {
-			return ErrDuplicateCode
-		}
-		if errors.As(err, &sqlErr) && sqlErr.ExtendedCode == sqlite3.ErrConstraintUnique {
-			return ErrDuplicateIdempotencyKey
-		}
-		return fmt.Errorf("repo: insert: %w", err)
+	return classifyInsertErr(err)
+}
+
+// BatchResult carries the per-row outcome of InsertBatch. Errors[i] is nil on
+// success, or one of ErrDuplicateCode / ErrDuplicateIdempotencyKey if that
+// specific row failed inside the shared transaction.
+type BatchResult struct {
+	Errors []error
+}
+
+// InsertBatch runs all inserts inside one transaction and a single fsync at
+// commit. SQLite default conflict resolution is ABORT, which rolls back only
+// the failing statement and keeps the transaction open, so the successful
+// rows still commit. The returned error is non-nil only on a transaction-level
+// failure (begin/prepare/commit), in which case Errors is unset.
+func (r *Repository) InsertBatch(ctx context.Context, rows []ShortURL) (BatchResult, error) {
+	if len(rows) == 0 {
+		return BatchResult{}, nil
 	}
-	return nil
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return BatchResult{}, fmt.Errorf("repo: begin: %w", err)
+	}
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO short_urls(code, long_url, owner_id, idempotency_key, created_at) VALUES(?, ?, ?, ?, ?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		return BatchResult{}, fmt.Errorf("repo: prepare: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	errs := make([]error, len(rows))
+	anyOK := false
+	for i, row := range rows {
+		var key any
+		if row.IdempotencyKey != "" {
+			key = row.IdempotencyKey
+		}
+		_, execErr := stmt.ExecContext(ctx,
+			row.Code, row.LongURL, row.OwnerID, key, row.CreatedAt.UTC(),
+		)
+		errs[i] = classifyInsertErr(execErr)
+		if errs[i] == nil {
+			anyOK = true
+		}
+	}
+	if anyOK {
+		if err := tx.Commit(); err != nil {
+			return BatchResult{}, fmt.Errorf("repo: commit: %w", err)
+		}
+	} else {
+		_ = tx.Rollback()
+	}
+	return BatchResult{Errors: errs}, nil
+}
+
+func classifyInsertErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	var sqlErr sqlite3.Error
+	if errors.As(err, &sqlErr) && sqlErr.ExtendedCode == sqlite3.ErrConstraintPrimaryKey {
+		return ErrDuplicateCode
+	}
+	if errors.As(err, &sqlErr) && sqlErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+		return ErrDuplicateIdempotencyKey
+	}
+	return fmt.Errorf("repo: insert: %w", err)
 }
 
 // GetByCode looks up a mapping by its short code.

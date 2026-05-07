@@ -23,10 +23,22 @@ import (
 
 	"github.com/yld/url-shortener/services/platform-events/events"
 	shortenerv1 "github.com/yld/url-shortener/services/proto/gen/shortener/v1"
+	"github.com/yld/url-shortener/services/shortener/internal/batcher"
 	"github.com/yld/url-shortener/services/shortener/internal/codegen"
 	"github.com/yld/url-shortener/services/shortener/internal/repo"
 	"github.com/yld/url-shortener/services/shortener/internal/service"
 )
+
+// batchingRepo decorates *repo.Repository so Insert is routed through a
+// WriteBatcher while the read methods stay direct.
+type batchingRepo struct {
+	*repo.Repository
+	wb *batcher.WriteBatcher
+}
+
+func (b *batchingRepo) Insert(ctx context.Context, row repo.ShortURL) error {
+	return b.wb.Insert(ctx, row)
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -40,6 +52,8 @@ type config struct {
 	dbPath       string
 	codeLength   int
 	maxRetries   int
+	batchSize    int
+	batchTimeout time.Duration
 	kafkaBrokers []string
 	shutdownDur  time.Duration
 }
@@ -50,9 +64,20 @@ func loadConfig() config {
 		dbPath:       envDefault("SHORTENER_DB", "shortener.db"),
 		codeLength:   envInt("SHORTENER_CODE_LENGTH", 8),
 		maxRetries:   envInt("SHORTENER_MAX_RETRIES", 5),
+		batchSize:    envInt("SHORTENER_BATCH_SIZE", 0),
+		batchTimeout: envDuration("SHORTENER_BATCH_TIMEOUT", 10*time.Millisecond),
 		kafkaBrokers: envList("SHORTENER_KAFKA_BROKERS"),
 		shutdownDur:  10 * time.Second,
 	}
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return def
 }
 
 func envList(key string) []string {
@@ -120,7 +145,15 @@ func run() error {
 		logger.Warn("SHORTENER_KAFKA_BROKERS unset; ShortURLCreated events will not be published")
 	}
 
-	srv := service.New(repo.New(db), gen, publisher, cfg.maxRetries, service.WithLogger(logger))
+	r := repo.New(db)
+	var insertRepo service.Repo = r
+	var wb *batcher.WriteBatcher
+	if cfg.batchSize > 1 {
+		wb = batcher.New(r, cfg.batchSize, cfg.batchTimeout)
+		insertRepo = &batchingRepo{Repository: r, wb: wb}
+		logger.Info("write batcher enabled", "size", cfg.batchSize, "timeout", cfg.batchTimeout)
+	}
+	srv := service.New(insertRepo, gen, publisher, cfg.maxRetries, service.WithLogger(logger))
 
 	gsrv := grpc.NewServer()
 	shortenerv1.RegisterShortenerServiceServer(gsrv, srv)
@@ -157,6 +190,9 @@ func run() error {
 	stopped := make(chan struct{})
 	go func() {
 		gsrv.GracefulStop()
+		if wb != nil {
+			wb.Close()
+		}
 		close(stopped)
 	}()
 	select {

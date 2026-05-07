@@ -1,6 +1,7 @@
 import { createClient } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
 import { AnalyticsService } from './gen/analytics/v1/analytics_pb.js';
+import { LoadGenService } from './gen/loadgen/v1/loadgen_pb.js';
 import { ResolverService } from './gen/resolver/v1/resolver_pb.js';
 import { ShortenerService } from './gen/shortener/v1/shortener_pb.js';
 
@@ -17,6 +18,7 @@ export interface Clients {
   shortener: ReturnType<typeof createClient<typeof ShortenerService>>;
   resolver: ReturnType<typeof createClient<typeof ResolverService>>;
   analytics: ReturnType<typeof createClient<typeof AnalyticsService>>;
+  loadgen: ReturnType<typeof createClient<typeof LoadGenService>>;
   transport: Transport;
 }
 
@@ -32,8 +34,9 @@ export function createClients(opts: ClientsOptions): Clients {
     shortener: createClient(ShortenerService, transport),
     resolver: createClient(ResolverService, transport),
     analytics: createClient(AnalyticsService, transport),
+    loadgen: createClient(LoadGenService, transport),
     transport,
   };
 }
 
-export { ShortenerService, ResolverService, AnalyticsService };
+export { ShortenerService, ResolverService, AnalyticsService, LoadGenService };

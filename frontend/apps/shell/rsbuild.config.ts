@@ -15,6 +15,7 @@ export default defineConfig({
         mfCopyButton: `mfCopyButton@${remoteUrl(5176)}`,
         mfUrlList: `mfUrlList@${remoteUrl(5177)}`,
         mfAnalyticsChart: `mfAnalyticsChart@${remoteUrl(5178)}`,
+        mfLoadTest: `mfLoadTest@${remoteUrl(5179)}`,
       },
       shared: {
         react: { singleton: true, requiredVersion: '18.3.1' },

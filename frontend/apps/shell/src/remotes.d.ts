@@ -25,3 +25,7 @@ declare module 'mfUrlList/UrlList' {
 declare module 'mfAnalyticsChart/AnalyticsChart' {
   export const AnalyticsChart: React.ComponentType<{ code: string }>;
 }
+
+declare module 'mfLoadTest/LoadTest' {
+  export const LoadTest: React.ComponentType<{ baseUrl?: string }>;
+}

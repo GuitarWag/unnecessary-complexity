@@ -8,6 +8,7 @@
     "./shortener": "./src/gen/shortener/v1/shortener_pb.ts",
     "./resolver": "./src/gen/resolver/v1/resolver_pb.ts",
     "./analytics": "./src/gen/analytics/v1/analytics_pb.ts",
+    "./loadgen": "./src/gen/loadgen/v1/loadgen_pb.ts",
     "./events": "./src/gen/events/v1/events_pb.ts"
   },
   "scripts": {

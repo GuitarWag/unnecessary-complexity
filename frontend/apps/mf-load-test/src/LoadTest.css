@@ -1,0 +1,182 @@
+.load-test {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  color: var(--text, #f8fafc);
+}
+
+.load-test__presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.75rem;
+}
+
+.load-test__preset {
+  border: 1px solid var(--border, #243352);
+  border-radius: var(--radius, 14px);
+  padding: 0.9rem 1rem;
+  background: var(--bg-elev, #111c33);
+  color: var(--text, #f8fafc);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  transition: border-color var(--transition, 200ms ease),
+    background var(--transition, 200ms ease), transform var(--transition, 200ms ease);
+}
+
+.load-test__preset:hover {
+  border-color: var(--accent, #22c55e);
+  background: var(--bg-elev-2, #182542);
+}
+
+.load-test__preset--selected {
+  border-color: var(--accent, #22c55e);
+  background: var(--bg-elev-2, #182542);
+  box-shadow: 0 0 0 3px var(--accent-soft, rgba(34, 197, 94, 0.12));
+}
+
+.load-test__preset-name {
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.85rem;
+  color: var(--text, #f8fafc);
+}
+
+.load-test__preset-meta {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.78rem;
+  color: var(--text-muted, #94a3b8);
+  line-height: 1.5;
+}
+
+.load-test__controls {
+  display: flex;
+  gap: 0.85rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.load-test__run {
+  padding: 0.65rem 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.load-test__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.85rem;
+  border-radius: 999px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid var(--border, #243352);
+  background: var(--bg-elev, #111c33);
+  color: var(--text-muted, #94a3b8);
+}
+
+.load-test__pill::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.load-test__pill--running {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.load-test__pill--completed {
+  color: var(--accent, #22c55e);
+  border-color: rgba(34, 197, 94, 0.5);
+  background: var(--accent-soft, rgba(34, 197, 94, 0.12));
+}
+
+.load-test__pill--failed {
+  color: var(--danger, #f87171);
+  border-color: rgba(248, 113, 113, 0.5);
+  background: var(--danger-soft, rgba(248, 113, 113, 0.12));
+}
+
+.load-test__charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.85rem;
+}
+
+.load-test__chart {
+  border: 1px solid var(--border, #243352);
+  border-radius: var(--radius, 14px);
+  padding: 1rem 1.1rem;
+  background: var(--bg-elev, #111c33);
+  box-shadow: var(--shadow-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.load-test__chart-title {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted, #94a3b8);
+}
+
+.load-test__chart-value {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 1.65rem;
+  font-weight: 600;
+  color: var(--text, #f8fafc);
+  letter-spacing: -0.01em;
+}
+
+.load-test__chart svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.load-test__chart svg path,
+.load-test__chart svg polyline {
+  stroke: var(--accent, #22c55e);
+}
+
+.load-test__summary {
+  border: 1px solid var(--border, #243352);
+  border-radius: var(--radius, 14px);
+  padding: 1.25rem 1.5rem;
+  background: var(--bg-elev, #111c33);
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem 2rem;
+}
+
+.load-test__summary-label {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted, #94a3b8);
+  margin-bottom: 0.25rem;
+}
+
+.load-test__summary-value {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-weight: 600;
+  font-size: 1.15rem;
+  color: var(--text, #f8fafc);
+}

@@ -147,6 +147,52 @@ importers:
         specifier: 2.1.8
         version: 2.1.8(jsdom@25.0.1)
 
+  apps/mf-load-test:
+    dependencies:
+      '@url-shortener/proto-web':
+        specifier: workspace:*
+        version: link:../../packages/proto-web
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: 18.3.1
+        version: 18.3.1(react@18.3.1)
+    devDependencies:
+      '@module-federation/rsbuild-plugin':
+        specifier: 0.7.6
+        version: 0.7.6(@module-federation/enhanced@0.7.6(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.6.3))(@rsbuild/core@1.1.10)
+      '@rsbuild/core':
+        specifier: 1.1.10
+        version: 1.1.10
+      '@rsbuild/plugin-react':
+        specifier: 1.0.7
+        version: 1.0.7(@rsbuild/core@1.1.10)
+      '@testing-library/jest-dom':
+        specifier: 6.6.3
+        version: 6.6.3
+      '@testing-library/react':
+        specifier: 16.1.0
+        version: 16.1.0(@testing-library/dom@10.4.1)(@types/react-dom@18.3.1)(@types/react@18.3.12)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@testing-library/user-event':
+        specifier: 14.5.2
+        version: 14.5.2(@testing-library/dom@10.4.1)
+      '@types/react':
+        specifier: 18.3.12
+        version: 18.3.12
+      '@types/react-dom':
+        specifier: 18.3.1
+        version: 18.3.1
+      jsdom:
+        specifier: 25.0.1
+        version: 25.0.1
+      typescript:
+        specifier: 5.6.3
+        version: 5.6.3
+      vitest:
+        specifier: 2.1.8
+        version: 2.1.8(jsdom@25.0.1)
+
   apps/mf-url-input:
     dependencies:
       '@url-shortener/proto-web':

@@ -24,6 +24,9 @@ export function createClients(opts: ClientsOptions): Clients {
   const transport = createConnectTransport({
     baseUrl: opts.baseUrl,
     fetch: opts.fetch ?? globalThis.fetch,
+    // Send Content-Type: application/proto on RPCs. Smaller payloads, less CPU
+    // than JSON. Connect-Go negotiates by content-type, no server change needed.
+    useBinaryFormat: true,
   });
   return {
     shortener: createClient(ShortenerService, transport),

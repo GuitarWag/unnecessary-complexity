@@ -60,16 +60,16 @@ func newTestServer(t *testing.T) (*Server, *events.FakePublisher) {
 	return New(repo.New(db), gen, pub, 5), pub
 }
 
-func newTestClient(t *testing.T) (shortenerv1.ShortenerServiceClient, *events.FakePublisher) {
+func newTestClient(t *testing.T) (shortenerv1.ShortenerServiceClient, *Server, *events.FakePublisher) {
 	t.Helper()
 	srv, pub := newTestServer(t)
-	return dialBuf(t, srv), pub
+	return dialBuf(t, srv), srv, pub
 }
 
 func TestShorten_CreatesNew(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	resp, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
 		LongUrl: "https://example.com/foo",
 	})
@@ -83,7 +83,7 @@ func TestShorten_CreatesNew(t *testing.T) {
 func TestShorten_NoKeyAlwaysCreatesFreshRow(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	long := "https://example.com/no-dedup"
 
 	first, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: long})
@@ -101,7 +101,7 @@ func TestShorten_NoKeyAlwaysCreatesFreshRow(t *testing.T) {
 func TestShorten_SameKeyReturnsSameCode(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	req := &shortenerv1.ShortenRequest{
 		LongUrl:        "https://example.com/dedup",
 		OwnerId:        "alice",
@@ -120,7 +120,7 @@ func TestShorten_SameKeyReturnsSameCode(t *testing.T) {
 func TestShorten_DifferentKeysProduceDifferentCodes(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	first, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
 		LongUrl: "https://example.com/k", OwnerId: "alice", IdempotencyKey: "k1",
 	})
@@ -136,7 +136,7 @@ func TestShorten_DifferentKeysProduceDifferentCodes(t *testing.T) {
 func TestShorten_KeyIsScopedByOwner(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	alice, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
 		LongUrl: "https://example.com/scoped", OwnerId: "alice", IdempotencyKey: "shared",
 	})
@@ -153,7 +153,7 @@ func TestShorten_KeyIsScopedByOwner(t *testing.T) {
 func TestShorten_RejectsEmptyURL(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	_, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: ""})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
@@ -162,7 +162,7 @@ func TestShorten_RejectsEmptyURL(t *testing.T) {
 func TestShorten_RejectsNonHTTPURL(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	for _, bad := range []string{"javascript:alert(1)", "ftp://x", "not a url", "//example.com"} {
 		_, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: bad})
 		require.Errorf(t, err, "input: %q", bad)
@@ -173,7 +173,7 @@ func TestShorten_RejectsNonHTTPURL(t *testing.T) {
 func TestGet_ReturnsExisting(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	created, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
 		LongUrl: "https://example.com/get",
 	})
@@ -188,7 +188,7 @@ func TestGet_ReturnsExisting(t *testing.T) {
 func TestGet_NotFound(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	_, err := c.Get(context.Background(), &shortenerv1.GetRequest{Code: "missing"})
 	require.Error(t, err)
 	assert.Equal(t, codes.NotFound, status.Code(err))
@@ -197,7 +197,7 @@ func TestGet_NotFound(t *testing.T) {
 func TestGet_RejectsEmptyCode(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	_, err := c.Get(context.Background(), &shortenerv1.GetRequest{Code: ""})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
@@ -248,7 +248,7 @@ func TestShorten_GivesUpAfterMaxRetries(t *testing.T) {
 func TestServer_RoundTripPreservesCreatedAt(t *testing.T) {
 	t.Parallel()
 
-	c, _ := newTestClient(t)
+	c, _, _ := newTestClient(t)
 	before := time.Now().Add(-1 * time.Second).UTC()
 
 	created, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
@@ -266,11 +266,12 @@ func TestServer_RoundTripPreservesCreatedAt(t *testing.T) {
 func TestShorten_PublishesShortURLCreated(t *testing.T) {
 	t.Parallel()
 
-	c, pub := newTestClient(t)
+	c, srv, pub := newTestClient(t)
 	resp, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
 		LongUrl: "https://example.com/published",
 	})
 	require.NoError(t, err)
+	srv.Wait()
 
 	msgs := pub.Messages(events.TopicShortURLCreated)
 	require.Len(t, msgs, 1)
@@ -286,7 +287,7 @@ func TestShorten_PublishesShortURLCreated(t *testing.T) {
 func TestShorten_DoesNotPublishOnIdempotentReturn(t *testing.T) {
 	t.Parallel()
 
-	c, pub := newTestClient(t)
+	c, srv, pub := newTestClient(t)
 	req := &shortenerv1.ShortenRequest{
 		LongUrl:        "https://example.com/no-double-publish",
 		OwnerId:        "alice",
@@ -297,6 +298,7 @@ func TestShorten_DoesNotPublishOnIdempotentReturn(t *testing.T) {
 	require.NoError(t, err)
 	_, err = c.Shorten(context.Background(), req)
 	require.NoError(t, err)
+	srv.Wait()
 
 	assert.Len(t, pub.Messages(events.TopicShortURLCreated), 1,
 		"second Shorten with the same idempotency key must not republish")
@@ -305,13 +307,14 @@ func TestShorten_DoesNotPublishOnIdempotentReturn(t *testing.T) {
 func TestShorten_PublishesEachCreateWhenNoKey(t *testing.T) {
 	t.Parallel()
 
-	c, pub := newTestClient(t)
+	c, srv, pub := newTestClient(t)
 	long := "https://example.com/each-publishes"
 
 	_, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: long})
 	require.NoError(t, err)
 	_, err = c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: long})
 	require.NoError(t, err)
+	srv.Wait()
 
 	assert.Len(t, pub.Messages(events.TopicShortURLCreated), 2,
 		"each new row must publish its own ShortURLCreated event")

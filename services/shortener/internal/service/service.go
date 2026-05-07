@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/url"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -49,7 +50,12 @@ type Server struct {
 	maxRetries int
 	now        func() time.Time
 	logger     *slog.Logger
+	wg         sync.WaitGroup
 }
+
+// Wait blocks until all in-flight async publishes have settled.
+// Useful at shutdown; tests use Eventually so they don't need this.
+func (s *Server) Wait() { s.wg.Wait() }
 
 // Option configures a Server.
 type Option func(*Server)
@@ -151,9 +157,10 @@ func (s *Server) Get(ctx context.Context, req *shortenerv1.GetRequest) (*shorten
 	return &shortenerv1.GetResponse{Url: toProto(row)}, nil
 }
 
-// publishCreated emits ShortURLCreated. A publish failure is logged but does not fail the RPC,
-// since the source-of-truth write has already succeeded.
-func (s *Server) publishCreated(ctx context.Context, row repo.ShortURL) {
+// publishCreated emits ShortURLCreated asynchronously. A publish failure is logged but does
+// not fail the RPC, since the source-of-truth write has already succeeded. Async because the
+// response should not wait on Kafka latency.
+func (s *Server) publishCreated(_ context.Context, row repo.ShortURL) {
 	if s.publisher == nil {
 		return
 	}
@@ -162,9 +169,15 @@ func (s *Server) publishCreated(ctx context.Context, row repo.ShortURL) {
 		LongUrl:   row.LongURL,
 		CreatedAt: timestamppb.New(row.CreatedAt),
 	}
-	if err := s.publisher.Publish(ctx, events.TopicShortURLCreated, row.Code, evt); err != nil {
-		s.logger.Warn("publish ShortURLCreated failed", "code", row.Code, "err", err)
-	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.publisher.Publish(ctx, events.TopicShortURLCreated, row.Code, evt); err != nil {
+			s.logger.Warn("publish ShortURLCreated failed", "code", row.Code, "err", err)
+		}
+	}()
 }
 
 func validateLongURL(raw string) error {

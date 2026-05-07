@@ -14,10 +14,10 @@ import (
 )
 
 type fakeBatchInserter struct {
-	mu     sync.Mutex
+	mu      sync.Mutex
 	batches [][]repo.ShortURL
-	err    error
-	rowErr map[string]error
+	err     error
+	rowErr  map[string]error
 }
 
 func (f *fakeBatchInserter) InsertBatch(_ context.Context, rows []repo.ShortURL) (repo.BatchResult, error) {

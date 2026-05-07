@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package loadgen.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/yld/url-shortener/services/proto/gen/loadgen/v1;loadgenv1";
+
+// LoadGenService streams synthetic load against the gateway and resolver and emits
+// per-second samples while the run is in flight.
+service LoadGenService {
+  // RunLoadTest starts a load run and streams samples until it terminates.
+  rpc RunLoadTest(LoadTestRequest) returns (stream LoadTestSample);
+}
+
+message LoadTestRequest {
+  // When set to a known preset, scenario/target_rps/duration_seconds are derived
+  // server-side. When CUSTOM (or PRESET_UNSPECIFIED), the explicit fields below apply.
+  Preset preset = 1;
+  // "read", "write" or "mixed". Required when preset is CUSTOM/UNSPECIFIED.
+  string scenario = 2;
+  uint32 target_rps = 3;
+  uint32 duration_seconds = 4;
+}
+
+enum Preset {
+  PRESET_UNSPECIFIED = 0;
+  LOW = 1;
+  MEDIUM = 2;
+  HIGH = 3;
+  XHIGH = 4;
+  XXHIGH = 5;
+  INSANE = 6;
+  CUSTOM = 7;
+}
+
+message LoadTestSample {
+  google.protobuf.Timestamp ts = 1;
+  uint32 elapsed_seconds = 2;
+  double current_rps = 3;
+  uint64 total_requests = 4;
+  uint64 errors = 5;
+  double p50_ms = 6;
+  double p95_ms = 7;
+  double p99_ms = 8;
+  Status status = 9;
+  string message = 10;
+}
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  RUNNING = 1;
+  COMPLETED = 2;
+  FAILED = 3;
+}

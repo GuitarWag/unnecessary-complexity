@@ -3,6 +3,7 @@ go 1.26
 use (
 	./services/analytics
 	./services/gateway
+	./services/loadgen
 	./services/platform-events
 	./services/proto
 	./services/resolver

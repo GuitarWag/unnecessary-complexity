@@ -11,17 +11,17 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	"github.com/yld/url-shortener/services/platform-events/events"
+	"github.com/yld/url-shortener/services/platform-events/metrics"
 	shortenerv1 "github.com/yld/url-shortener/services/proto/gen/shortener/v1"
 	"github.com/yld/url-shortener/services/shortener/internal/batcher"
 	"github.com/yld/url-shortener/services/shortener/internal/codegen"
@@ -49,24 +49,24 @@ func main() {
 
 type config struct {
 	addr         string
-	dbPath       string
+	databaseURL  string
 	codeLength   int
 	maxRetries   int
 	batchSize    int
+	maxConns     int
 	batchTimeout time.Duration
-	kafkaBrokers []string
 	shutdownDur  time.Duration
 }
 
 func loadConfig() config {
 	return config{
 		addr:         envDefault("SHORTENER_ADDR", ":50051"),
-		dbPath:       envDefault("SHORTENER_DB", "shortener.db"),
+		databaseURL:  os.Getenv("SHORTENER_DATABASE_URL"),
 		codeLength:   envInt("SHORTENER_CODE_LENGTH", 8),
 		maxRetries:   envInt("SHORTENER_MAX_RETRIES", 5),
 		batchSize:    envInt("SHORTENER_BATCH_SIZE", 0),
+		maxConns:     envInt("SHORTENER_DB_MAX_CONNS", 20),
 		batchTimeout: envDuration("SHORTENER_BATCH_TIMEOUT", 10*time.Millisecond),
-		kafkaBrokers: envList("SHORTENER_KAFKA_BROKERS"),
 		shutdownDur:  10 * time.Second,
 	}
 }
@@ -78,21 +78,6 @@ func envDuration(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
-}
-
-func envList(key string) []string {
-	v, ok := os.LookupEnv(key)
-	if !ok || v == "" {
-		return nil
-	}
-	parts := strings.Split(v, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func envDefault(key, def string) string {
@@ -115,34 +100,30 @@ func run() error {
 	cfg := loadConfig()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	metrics.Serve(os.Getenv("METRICS_ADDR"), logger)
 
-	dsn := fmt.Sprintf("%s?_journal=WAL&_busy_timeout=5000&_foreign_keys=on", cfg.dbPath)
-	db, err := sql.Open("sqlite3", dsn)
+	if cfg.databaseURL == "" {
+		return errors.New("SHORTENER_DATABASE_URL is required")
+	}
+	db, err := sql.Open("pgx", cfg.databaseURL)
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
+	// Postgres allows 100 connections by default. Without a cap, a burst of
+	// concurrent Shorten calls (no batcher) opens one connection each.
+	db.SetMaxOpenConns(cfg.maxConns)
 	defer func() { _ = db.Close() }()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if err := repo.Migrate(ctx, db); err != nil {
+	if err := migrateWithRetry(ctx, db, logger); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 
 	gen, err := codegen.NewGenerator(cfg.codeLength, nil)
 	if err != nil {
 		return fmt.Errorf("codegen: %w", err)
-	}
-
-	var publisher service.Publisher
-	if len(cfg.kafkaBrokers) > 0 {
-		kp := events.NewKafkaPublisher(cfg.kafkaBrokers)
-		defer func() { _ = kp.Close() }()
-		publisher = kp
-		logger.Info("kafka publisher enabled", "brokers", cfg.kafkaBrokers)
-	} else {
-		logger.Warn("SHORTENER_KAFKA_BROKERS unset; ShortURLCreated events will not be published")
 	}
 
 	r := repo.New(db)
@@ -153,9 +134,9 @@ func run() error {
 		insertRepo = &batchingRepo{Repository: r, wb: wb}
 		logger.Info("write batcher enabled", "size", cfg.batchSize, "timeout", cfg.batchTimeout)
 	}
-	srv := service.New(insertRepo, gen, publisher, cfg.maxRetries, service.WithLogger(logger))
+	srv := service.New(insertRepo, gen, cfg.maxRetries)
 
-	gsrv := grpc.NewServer()
+	gsrv := grpc.NewServer(grpc.ChainUnaryInterceptor(metrics.UnaryServerInterceptor()))
 	shortenerv1.RegisterShortenerServiceServer(gsrv, srv)
 
 	hs := health.NewServer()
@@ -170,7 +151,7 @@ func run() error {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		logger.Info("shortener gRPC listening", "addr", cfg.addr, "db", cfg.dbPath)
+		logger.Info("shortener gRPC listening", "addr", cfg.addr)
 		if err := gsrv.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			serveErr <- err
 		}
@@ -201,4 +182,28 @@ func run() error {
 		gsrv.Stop()
 	}
 	return nil
+}
+
+// migrateWithRetry waits for Postgres, which can still be starting when the
+// shortener starts (compose under Tilt, a fresh k8s deploy).
+func migrateWithRetry(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
+	const attempts = 30
+	var err error
+	for i := 1; i <= attempts; i++ {
+		if err = repo.Migrate(ctx, db); err == nil {
+			return nil
+		}
+		// A SQL error from the server (bad password, missing database) will not
+		// fix itself. Only "starting up" is worth waiting for.
+		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code != "57P03" {
+			return err
+		}
+		logger.Warn("migrate failed, retrying", "attempt", i, "err", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	return err
 }

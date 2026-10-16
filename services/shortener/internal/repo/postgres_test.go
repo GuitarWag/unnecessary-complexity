@@ -3,20 +3,25 @@ package repo
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/yld/url-shortener/services/platform-events/events"
+	eventsv1 "github.com/yld/url-shortener/services/proto/gen/events/v1"
+	"github.com/yld/url-shortener/services/shortener/internal/pgtest"
 )
 
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
+	db := pgtest.New(t)
 	require.NoError(t, Migrate(context.Background(), db))
 	return db
 }
@@ -142,7 +147,7 @@ func TestInsert_DuplicateIdempotencyKeyPerOwner(t *testing.T) {
 	assert.ErrorIs(t, err, ErrDuplicateIdempotencyKey)
 }
 
-func TestInsert_DifferentOwnersMaySharaeIdempotencyKey(t *testing.T) {
+func TestInsert_DifferentOwnersMayShareIdempotencyKey(t *testing.T) {
 	t.Parallel()
 
 	r := New(newTestDB(t))
@@ -177,4 +182,90 @@ func TestInsert_ContextCancelled(t *testing.T) {
 
 	err := r.Insert(ctx, ShortURL{Code: "c", LongURL: "u", CreatedAt: time.Now()})
 	assert.True(t, errors.Is(err, context.Canceled))
+}
+
+func TestInsertBatch_PerRowConflicts(t *testing.T) {
+	t.Parallel()
+	r := New(newTestDB(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	result, err := r.InsertBatch(ctx, []ShortURL{
+		{Code: "ok", LongURL: "u", OwnerID: "alice", IdempotencyKey: "k", CreatedAt: now},
+		{Code: "ok", LongURL: "u", CreatedAt: now},
+		{Code: "other", LongURL: "u", OwnerID: "alice", IdempotencyKey: "k", CreatedAt: now},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Errors, 3)
+	assert.NoError(t, result.Errors[0])
+	assert.ErrorIs(t, result.Errors[1], ErrDuplicateCode)
+	assert.ErrorIs(t, result.Errors[2], ErrDuplicateIdempotencyKey)
+
+	_, err = r.GetByCode(ctx, "ok")
+	require.NoError(t, err, "the successful row must commit despite its neighbours failing")
+}
+
+var outboxInsert = regexp.MustCompile(
+	`table public\.outbox: INSERT: .*aggregatetype\[text\]:'([^']*)' aggregateid\[text\]:'([^']*)' .*payload\[bytea\]:'\\x([0-9a-f]*)'`)
+
+// Reads the WAL through test_decoding, which is what Debezium sees. The outbox
+// table itself is always empty after commit.
+func TestInsert_WritesOutboxEventToWAL(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	var slot string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT current_database()`).Scan(&slot))
+	_, err := db.ExecContext(ctx, `SELECT pg_create_logical_replication_slot($1, 'test_decoding')`, slot)
+	require.NoError(t, err)
+
+	r := New(db)
+	require.NoError(t, r.Insert(ctx, ShortURL{Code: "wal1", LongURL: "https://example.com/wal", CreatedAt: time.Now().UTC()}))
+
+	var outboxRows int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM outbox`).Scan(&outboxRows))
+	assert.Zero(t, outboxRows)
+
+	rows, err := db.QueryContext(ctx, `SELECT data FROM pg_logical_slot_get_changes($1, NULL, NULL)`, slot)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	var inserts [][]string
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		if m := outboxInsert.FindStringSubmatch(line); m != nil {
+			inserts = append(inserts, m[1:])
+		}
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, inserts, 1)
+
+	assert.Equal(t, events.TopicShortURLCreated, inserts[0][0])
+	assert.Equal(t, "wal1", inserts[0][1])
+	payload, err := hex.DecodeString(inserts[0][2])
+	require.NoError(t, err)
+	var evt eventsv1.ShortURLCreated
+	require.NoError(t, proto.Unmarshal(payload, &evt))
+	assert.Equal(t, "wal1", evt.GetCode())
+	assert.Equal(t, "https://example.com/wal", evt.GetLongUrl())
+}
+
+// init.sql creates the publication empty, before the slot. Migrate must then add
+// the outbox table instead of skipping the existing publication.
+func TestMigrate_AddsOutboxToPrecreatedPublication(t *testing.T) {
+	t.Parallel()
+	db := pgtest.New(t)
+	ctx := context.Background()
+	_, err := db.ExecContext(ctx, `CREATE PUBLICATION `+Publication+` WITH (publish = 'insert')`)
+	require.NoError(t, err)
+
+	require.NoError(t, Migrate(ctx, db))
+	require.NoError(t, Migrate(ctx, db))
+
+	var n int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT count(*) FROM pg_publication_tables WHERE pubname = $1 AND tablename = 'outbox'`, Publication,
+	).Scan(&n))
+	assert.Equal(t, 1, n)
 }

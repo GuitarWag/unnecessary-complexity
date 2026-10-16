@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -15,12 +14,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
-	"google.golang.org/protobuf/proto"
 
-	"github.com/yld/url-shortener/services/platform-events/events"
-	eventsv1 "github.com/yld/url-shortener/services/proto/gen/events/v1"
 	shortenerv1 "github.com/yld/url-shortener/services/proto/gen/shortener/v1"
 	"github.com/yld/url-shortener/services/shortener/internal/codegen"
+	"github.com/yld/url-shortener/services/shortener/internal/pgtest"
 	"github.com/yld/url-shortener/services/shortener/internal/repo"
 )
 
@@ -45,31 +42,24 @@ func dialBuf(t *testing.T, srv *Server) shortenerv1.ShortenerServiceClient {
 	return shortenerv1.NewShortenerServiceClient(conn)
 }
 
-func newTestServer(t *testing.T) (*Server, *events.FakePublisher) {
+func newTestRepo(t *testing.T) *repo.Repository {
 	t.Helper()
-
-	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
+	db := pgtest.New(t)
 	require.NoError(t, repo.Migrate(context.Background(), db))
-
-	gen, err := codegen.NewGenerator(8, nil)
-	require.NoError(t, err)
-
-	pub := events.NewFakePublisher()
-	return New(repo.New(db), gen, pub, 5), pub
+	return repo.New(db)
 }
 
-func newTestClient(t *testing.T) (shortenerv1.ShortenerServiceClient, *Server, *events.FakePublisher) {
+func newTestClient(t *testing.T) shortenerv1.ShortenerServiceClient {
 	t.Helper()
-	srv, pub := newTestServer(t)
-	return dialBuf(t, srv), srv, pub
+	gen, err := codegen.NewGenerator(8, nil)
+	require.NoError(t, err)
+	return dialBuf(t, New(newTestRepo(t), gen, 5))
 }
 
 func TestShorten_CreatesNew(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	resp, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
 		LongUrl: "https://example.com/foo",
 	})
@@ -83,7 +73,7 @@ func TestShorten_CreatesNew(t *testing.T) {
 func TestShorten_NoKeyAlwaysCreatesFreshRow(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	long := "https://example.com/no-dedup"
 
 	first, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: long})
@@ -101,7 +91,7 @@ func TestShorten_NoKeyAlwaysCreatesFreshRow(t *testing.T) {
 func TestShorten_SameKeyReturnsSameCode(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	req := &shortenerv1.ShortenRequest{
 		LongUrl:        "https://example.com/dedup",
 		OwnerId:        "alice",
@@ -120,7 +110,7 @@ func TestShorten_SameKeyReturnsSameCode(t *testing.T) {
 func TestShorten_DifferentKeysProduceDifferentCodes(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	first, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
 		LongUrl: "https://example.com/k", OwnerId: "alice", IdempotencyKey: "k1",
 	})
@@ -136,7 +126,7 @@ func TestShorten_DifferentKeysProduceDifferentCodes(t *testing.T) {
 func TestShorten_KeyIsScopedByOwner(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	alice, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
 		LongUrl: "https://example.com/scoped", OwnerId: "alice", IdempotencyKey: "shared",
 	})
@@ -153,7 +143,7 @@ func TestShorten_KeyIsScopedByOwner(t *testing.T) {
 func TestShorten_RejectsEmptyURL(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	_, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: ""})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
@@ -162,7 +152,7 @@ func TestShorten_RejectsEmptyURL(t *testing.T) {
 func TestShorten_RejectsNonHTTPURL(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	for _, bad := range []string{"javascript:alert(1)", "ftp://x", "not a url", "//example.com"} {
 		_, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: bad})
 		require.Errorf(t, err, "input: %q", bad)
@@ -173,7 +163,7 @@ func TestShorten_RejectsNonHTTPURL(t *testing.T) {
 func TestGet_ReturnsExisting(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	created, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
 		LongUrl: "https://example.com/get",
 	})
@@ -188,7 +178,7 @@ func TestGet_ReturnsExisting(t *testing.T) {
 func TestGet_NotFound(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	_, err := c.Get(context.Background(), &shortenerv1.GetRequest{Code: "missing"})
 	require.Error(t, err)
 	assert.Equal(t, codes.NotFound, status.Code(err))
@@ -197,7 +187,7 @@ func TestGet_NotFound(t *testing.T) {
 func TestGet_RejectsEmptyCode(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	_, err := c.Get(context.Background(), &shortenerv1.GetRequest{Code: ""})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
@@ -208,12 +198,7 @@ func TestShorten_RetriesOnCollision(t *testing.T) {
 
 	// Force the generator to emit the same code twice in a row, then a fresh one.
 	scripted := &scriptedGen{codes: []string{"AAAAAAAA", "AAAAAAAA", "BBBBBBBB"}}
-	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, repo.Migrate(context.Background(), db))
-
-	srv := New(repo.New(db), scripted, events.NewFakePublisher(), 5)
+	srv := New(newTestRepo(t), scripted, 5)
 	c := dialBuf(t, srv)
 
 	first, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: "https://a.example/1"})
@@ -229,15 +214,10 @@ func TestShorten_GivesUpAfterMaxRetries(t *testing.T) {
 	t.Parallel()
 
 	scripted := &scriptedGen{codes: []string{"X", "X", "X"}, repeat: true}
-	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, repo.Migrate(context.Background(), db))
-
-	srv := New(repo.New(db), scripted, events.NewFakePublisher(), 3)
+	srv := New(newTestRepo(t), scripted, 3)
 	c := dialBuf(t, srv)
 
-	_, err = c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: "https://a.example/first"})
+	_, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: "https://a.example/first"})
 	require.NoError(t, err)
 
 	_, err = c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: "https://a.example/second"})
@@ -248,7 +228,7 @@ func TestShorten_GivesUpAfterMaxRetries(t *testing.T) {
 func TestServer_RoundTripPreservesCreatedAt(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestClient(t)
+	c := newTestClient(t)
 	before := time.Now().Add(-1 * time.Second).UTC()
 
 	created, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
@@ -261,96 +241,6 @@ func TestServer_RoundTripPreservesCreatedAt(t *testing.T) {
 	ts := got.GetUrl().GetCreatedAt().AsTime()
 	assert.True(t, ts.After(before) || ts.Equal(before),
 		"created_at %v should be after %v", ts, before)
-}
-
-func TestShorten_PublishesShortURLCreated(t *testing.T) {
-	t.Parallel()
-
-	c, srv, pub := newTestClient(t)
-	resp, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
-		LongUrl: "https://example.com/published",
-	})
-	require.NoError(t, err)
-	srv.Wait()
-
-	msgs := pub.Messages(events.TopicShortURLCreated)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, resp.GetUrl().GetCode(), msgs[0].Key)
-
-	var got eventsv1.ShortURLCreated
-	require.NoError(t, proto.Unmarshal(msgs[0].Value, &got))
-	assert.Equal(t, resp.GetUrl().GetCode(), got.GetCode())
-	assert.Equal(t, "https://example.com/published", got.GetLongUrl())
-	assert.NotNil(t, got.GetCreatedAt())
-}
-
-func TestShorten_DoesNotPublishOnIdempotentReturn(t *testing.T) {
-	t.Parallel()
-
-	c, srv, pub := newTestClient(t)
-	req := &shortenerv1.ShortenRequest{
-		LongUrl:        "https://example.com/no-double-publish",
-		OwnerId:        "alice",
-		IdempotencyKey: "k-once",
-	}
-
-	_, err := c.Shorten(context.Background(), req)
-	require.NoError(t, err)
-	_, err = c.Shorten(context.Background(), req)
-	require.NoError(t, err)
-	srv.Wait()
-
-	assert.Len(t, pub.Messages(events.TopicShortURLCreated), 1,
-		"second Shorten with the same idempotency key must not republish")
-}
-
-func TestShorten_PublishesEachCreateWhenNoKey(t *testing.T) {
-	t.Parallel()
-
-	c, srv, pub := newTestClient(t)
-	long := "https://example.com/each-publishes"
-
-	_, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: long})
-	require.NoError(t, err)
-	_, err = c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: long})
-	require.NoError(t, err)
-	srv.Wait()
-
-	assert.Len(t, pub.Messages(events.TopicShortURLCreated), 2,
-		"each new row must publish its own ShortURLCreated event")
-}
-
-func TestShorten_StillSucceedsWhenPublishFails(t *testing.T) {
-	t.Parallel()
-
-	srv, pub := newTestServer(t)
-	pub.SetError(assert.AnError)
-	c := dialBuf(t, srv)
-
-	resp, err := c.Shorten(context.Background(), &shortenerv1.ShortenRequest{
-		LongUrl: "https://example.com/publish-fail",
-	})
-	require.NoError(t, err, "publish failure must not fail the RPC")
-	assert.True(t, resp.GetCreated())
-	assert.NotEmpty(t, resp.GetUrl().GetCode())
-}
-
-func TestShorten_NilPublisherIsAllowed(t *testing.T) {
-	t.Parallel()
-
-	db, err := sql.Open("sqlite3", ":memory:?_foreign_keys=on")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, repo.Migrate(context.Background(), db))
-
-	gen, err := codegen.NewGenerator(8, nil)
-	require.NoError(t, err)
-
-	srv := New(repo.New(db), gen, nil, 5)
-	c := dialBuf(t, srv)
-
-	_, err = c.Shorten(context.Background(), &shortenerv1.ShortenRequest{LongUrl: "https://x.example"})
-	require.NoError(t, err)
 }
 
 // scriptedGen returns predetermined codes in order.
@@ -366,4 +256,21 @@ func (s *scriptedGen) Generate() (string, error) {
 		s.pos++
 	}
 	return c, nil
+}
+
+func TestShorten_RejectsBadOwnerOrKey(t *testing.T) {
+	t.Parallel()
+
+	c := newTestClient(t)
+	long := strings.Repeat("k", maxOwnerKeyLen+1)
+	for _, req := range []*shortenerv1.ShortenRequest{
+		{LongUrl: "https://example.com", OwnerId: "a\x00b"},
+		{LongUrl: "https://example.com", IdempotencyKey: "k\x00"},
+		{LongUrl: "https://example.com", IdempotencyKey: long},
+		{LongUrl: "https://example.com", OwnerId: long},
+	} {
+		_, err := c.Shorten(context.Background(), req)
+		require.Error(t, err)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	}
 }

@@ -68,7 +68,7 @@ func TestUsers_DriveEveryActionWithoutErrors(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Add(1)
-		go func() { defer wg.Done(); user(ctx, i, c, p, st, cr, time.Millisecond, 42) }()
+		go func() { defer wg.Done(); user(ctx, i, c, p, st, cr, time.Millisecond, 42, false) }()
 	}
 	wg.Wait()
 
@@ -129,6 +129,7 @@ func TestConductor_SpikesLullsAndBounds(t *testing.T) {
 	}
 	assert.Positive(t, seen[spike])
 	assert.Positive(t, seen[lull])
+	assert.Positive(t, seen[attack])
 	assert.Greater(t, seen[steady], seen[spike]+seen[lull], "most of the time should be steady")
 	assert.GreaterOrEqual(t, peak, 60, "a spike should reach at least 3x the baseline")
 	assert.LessOrEqual(t, low, 4, "a lull should drop to almost nobody")
@@ -142,6 +143,31 @@ func TestUsers_IdleAboveActiveCount(t *testing.T) {
 	defer cancel()
 	st := &stats{totals: map[action]map[outcome]int{}, started: time.Now()}
 	cr := &crowd{} // active = 0: nobody may act
-	user(ctx, 0, c, &pool{now: time.Now}, st, cr, time.Millisecond, 1)
+	user(ctx, 0, c, &pool{now: time.Now}, st, cr, time.Millisecond, 1, false)
 	assert.Empty(t, st.totals)
+}
+
+// Every probe must reach the server as a well-formed HTTP request, and the
+// scoring must count a 4xx as ok and anything else as a finding.
+func TestSendBad_ScoresRejectionsAndWarnsOnHoles(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   outcome
+	}{{http.StatusBadRequest, ok}, {http.StatusNotFound, ok}, {http.StatusOK, fail}, {http.StatusInternalServerError, fail}} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(tc.status) }))
+		c := newClient(srv.URL, "", time.Second)
+		var warnings []string
+		warn := warnOnce(func(f string, a ...any) { warnings = append(warnings, fmt.Sprintf(f, a...)) })
+		r := rand.New(rand.NewPCG(3, 4))
+		for range len(probes) * 20 {
+			assert.Equal(t, tc.want, c.sendBad(context.Background(), r, warn), "status %d", tc.status)
+		}
+		srv.Close()
+		if tc.want == ok {
+			assert.Empty(t, warnings)
+		} else {
+			assert.NotEmpty(t, warnings)
+			assert.LessOrEqual(t, len(warnings), len(probes), "each finding is printed once")
+		}
+	}
 }

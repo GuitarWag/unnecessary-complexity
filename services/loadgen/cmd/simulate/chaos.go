@@ -9,10 +9,13 @@ import (
 )
 
 // crowd is the shared state the conductor writes and the users read: how many
-// users are active right now, and which link (if any) is going viral.
+// users are active right now, which link (if any) is going viral, and whether an
+// attack is on. warn reports a bad request the system did not reject.
 type crowd struct {
 	active atomic.Int64
 	viral  atomic.Pointer[string]
+	attack atomic.Bool
+	warn   func(string)
 }
 
 func (c *crowd) viralCode() string {
@@ -28,26 +31,32 @@ const (
 	steady phase = iota
 	spike
 	lull
+	attack
 )
 
 func (p phase) String() string {
-	return [...]string{"steady", "spike", "lull"}[p]
+	return [...]string{"steady", "spike", "lull", "attack"}[p]
 }
 
 // Odds per second of leaving the steady phase: a spike about every 45s, a lull
-// about every 90s, on average.
+// about every 90s, an attack about every 120s, on average.
 const (
-	spikeOdds = 1.0 / 45
-	lullOdds  = 1.0 / 90
+	spikeOdds  = 1.0 / 45
+	lullOdds   = 1.0 / 90
+	attackOdds = 1.0 / 120
+	// attackBadRate is the share of every user's actions that are bad requests
+	// while an attack runs.
+	attackBadRate = 0.3
 )
 
 // conductor decides the crowd size once per second. In steady it drifts around
 // base; a spike ramps fast to 3-8x base for 10-40s; a lull drops to almost
-// nobody for 10-30s. step is pure apart from r, so tests can drive it.
+// nobody for 10-30s; an attack keeps the size but turns 30% of all actions into
+// bad requests for 10-25s. step is pure apart from r, so tests can drive it.
 type conductor struct {
 	base, max int
 	phase     phase
-	left      int // seconds left in a spike or lull
+	left      int // seconds left in a spike, lull or attack
 	target    int
 	cur       float64
 }
@@ -78,6 +87,10 @@ func (c *conductor) step(r *rand.Rand) string {
 			c.target = r.IntN(c.base/5 + 1)
 			c.left = 10 + r.IntN(21)
 			event = fmt.Sprintf("lull down to %d users for %ds", c.target, c.left)
+		case x < spikeOdds+lullOdds+attackOdds:
+			c.phase = attack
+			c.left = 10 + r.IntN(16)
+			event = fmt.Sprintf("ATTACK: %.0f%% bad requests for %ds", attackBadRate*100, c.left)
 		default:
 			c.target = clamp(c.target+r.IntN(5)-2, c.base/2, c.base*3/2)
 		}
@@ -108,6 +121,7 @@ func conduct(done <-chan struct{}, cond *conductor, cr *crowd, p *pool, seed uin
 		case <-tick.C:
 		}
 		if event := cond.step(r); event != "" {
+			cr.attack.Store(cond.phase == attack)
 			if cond.phase == spike {
 				if code, ok := p.newest(); ok {
 					cr.viral.Store(&code)
@@ -122,11 +136,13 @@ func conduct(done <-chan struct{}, cond *conductor, cr *crowd, p *pool, seed uin
 	}
 }
 
-// persona is one kind of user: the action mix and how fast they act.
+// persona is one kind of user: the action mix and how fast they act. bad is the
+// share of actions that are invalid requests.
 type persona struct {
 	name                  string
 	shorten, click, stats float64 // cumulative thresholds; the rest is Get
 	pace                  float64 // multiplies -think
+	bad                   float64
 }
 
 var personas = []struct {
@@ -138,7 +154,15 @@ var personas = []struct {
 	{0.15, persona{name: "analyst", shorten: 0.05, click: 0.40, stats: 0.85, pace: 1.2}},
 }
 
-func pickPersona(r *rand.Rand) persona {
+// abuser joins the crowd only with -chaos. It mostly sends invalid requests.
+var abuser = persona{name: "abuser", shorten: 0.30, click: 0.80, stats: 0.90, pace: 0.5, bad: 0.8}
+
+const abuserShare = 0.06
+
+func pickPersona(r *rand.Rand, chaos bool) persona {
+	if chaos && r.Float64() < abuserShare {
+		return abuser
+	}
 	x := r.Float64()
 	for _, p := range personas {
 		if x < p.share {

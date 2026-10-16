@@ -35,6 +35,8 @@ const (
 	actClick   action = "click"
 	actStats   action = "stats"
 	actGet     action = "get"
+	// actBad is an invalid request; ok means the system rejected it with a 4xx.
+	actBad action = "bad-request"
 )
 
 // outcome is how one action ended. "miss" is a click on a code the resolver has
@@ -63,13 +65,21 @@ func newClient(target, host string, timeout time.Duration) *client {
 
 // do returns the status code and body; the response itself is already closed.
 func (c *client) do(ctx context.Context, method, path string, body any) (int, []byte, error) {
+	if body == nil {
+		return c.send(ctx, method, path, "", nil)
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return 0, nil, err
+	}
+	return c.send(ctx, method, path, "application/json", b)
+}
+
+// send is do with a raw body and content type, so probes can send broken input.
+func (c *client) send(ctx context.Context, method, path, contentType string, body []byte) (int, []byte, error) {
 	var rd io.Reader
 	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return 0, nil, err
-		}
-		rd = bytes.NewReader(b)
+		rd = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.target+path, rd)
 	if err != nil {
@@ -78,8 +88,8 @@ func (c *client) do(ctx context.Context, method, path string, body any) (int, []
 	if c.host != "" {
 		req.Host = c.host
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -215,7 +225,7 @@ func (s *stats) flush(w io.Writer, every time.Duration) {
 	}
 	_, _ = fmt.Fprintf(w, "[%s] %d actions, %.1f/s\n",
 		time.Since(s.started).Round(time.Second), len(win), float64(len(win))/every.Seconds())
-	for _, a := range []action{actShorten, actReplay, actClick, actStats, actGet} {
+	for _, a := range []action{actShorten, actReplay, actClick, actStats, actGet, actBad} {
 		xs := by[a]
 		if len(xs) == 0 {
 			continue
@@ -245,9 +255,9 @@ var sites = []string{
 // user runs one simulated person until ctx ends. The user idles while its id is
 // at or above the crowd's active count, which is how the conductor adds and
 // removes people. During a spike most clicks go to the viral link.
-func user(ctx context.Context, id int, c *client, p *pool, st *stats, cr *crowd, think time.Duration, seed uint64) {
+func user(ctx context.Context, id int, c *client, p *pool, st *stats, cr *crowd, think time.Duration, seed uint64, chaos bool) {
 	r := rand.New(rand.NewPCG(seed, uint64(id))) //nolint:gosec // simulated traffic, not security; id >= 0
-	who := pickPersona(r)
+	who := pickPersona(r, chaos)
 	owner := "sim-" + who.name + "-" + strconv.Itoa(id)
 	var lastKey, lastURL string
 	for ctx.Err() == nil {
@@ -257,8 +267,23 @@ func user(ctx context.Context, id int, c *client, p *pool, st *stats, cr *crowd,
 			}
 			continue
 		}
-		roll := r.Float64()
 		start := time.Now()
+		badRate := who.bad
+		if cr.attack.Load() {
+			badRate = max(badRate, attackBadRate)
+		}
+		if r.Float64() < badRate {
+			o := c.sendBad(ctx, r, cr.warn)
+			if ctx.Err() != nil {
+				return
+			}
+			st.record(actBad, o, time.Since(start))
+			if !sleep(ctx, time.Duration(r.ExpFloat64()*who.pace*float64(think))) {
+				return
+			}
+			continue
+		}
+		roll := r.Float64()
 		var a action
 		var o outcome
 		code, have := p.pick(r)
@@ -342,7 +367,9 @@ func main() {
 	p := &pool{settle: *settle, now: time.Now}
 	st := &stats{totals: map[action]map[outcome]int{}, started: time.Now()}
 	seed := rand.Uint64() //nolint:gosec // simulated traffic, not security
-	cr := &crowd{}
+	cr := &crowd{warn: warnOnce(func(f string, a ...any) {
+		fmt.Printf("[%s] "+f, append([]any{time.Since(st.started).Round(time.Second)}, a...)...)
+	})}
 	cr.active.Store(int64(*users))
 	spawn := *users
 	if *chaos {
@@ -363,7 +390,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			user(ctx, i, c, p, st, cr, *think, seed)
+			user(ctx, i, c, p, st, cr, *think, seed, *chaos)
 		}()
 	}
 
@@ -384,7 +411,7 @@ func main() {
 	}
 	wg.Wait()
 	fmt.Printf("\nstopped after %s, %d links created\n", time.Since(st.started).Round(time.Second), len(p.codes))
-	for _, a := range []action{actShorten, actReplay, actClick, actStats, actGet} {
+	for _, a := range []action{actShorten, actReplay, actClick, actStats, actGet, actBad} {
 		if t := st.totals[a]; t != nil {
 			fmt.Printf("  %-15s ok=%d miss=%d err=%d\n", a, t[ok], t[miss], t[fail])
 		}

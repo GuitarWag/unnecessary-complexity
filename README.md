@@ -125,7 +125,10 @@ make simulate          # simulated users from this machine, through the ingress
 - **Drift:** the crowd size drifts at random around `-users`.
 - **Spikes:** about once every 45 seconds, a flash crowd arrives at 3 to 8 times the baseline for 10 to 40 seconds, capped by `-max-users`. During a spike, 70% of clicks go to one viral link.
 - **Lulls:** about once every 90 seconds, traffic drops close to zero for 10 to 30 seconds.
-- **Personas:** each user is a clicker, a creator or an analyst, with its own action mix and pace.
+- **Personas:** each user is a clicker, a creator or an analyst, with its own action mix and pace. About 6% are abusers, who mostly send invalid requests.
+- **Attacks:** about once every 2 minutes, for 10 to 25 seconds, 30% of every user's actions are invalid requests.
+
+The invalid requests cover 18 probes: bad URLs, oversized fields, NUL bytes, malformed JSON, the wrong content type or HTTP method, unknown procedures, bad dates, unknown codes, path traversal and a 256KB body. Each one must get a 4xx. A 2xx (a validation hole) or a 5xx (a crash path) prints a `[bad]` line that names the probe.
 
 The simulator prints each phase change as a `[chaos]` line, so you can match it to the dashboard. Against Tilt, use `SIM_ARGS="-target http://localhost:8080 -host ''"`.
 

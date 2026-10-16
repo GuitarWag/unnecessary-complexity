@@ -1,0 +1,26 @@
+# Metrics, logs and dashboards for the url-shortener namespace. Separate from
+# k8s/base so the integration run stays fast: `make obs-up` applies it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: observability
+
+resources:
+  - namespace.yaml
+  - prometheus.yaml
+  - kube-state-metrics.yaml
+  - loki.yaml
+  - alloy.yaml
+  - grafana.yaml
+
+configMapGenerator:
+  - name: prometheus-config
+    files: [prometheus.yml]
+  - name: loki-config
+    files: [loki.yaml=loki-config.yaml]
+  - name: alloy-config
+    files: [config.alloy]
+  - name: grafana-provisioning
+    files: [datasources.yaml, dashboards.yaml]
+  - name: grafana-dashboards
+    files: [url-shortener.json=dashboards/url-shortener.json]

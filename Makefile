@@ -44,8 +44,20 @@ proto: tool-buf tool-protoc-gen-go tool-protoc-gen-go-grpc
 proto-lint: tool-buf
 	cd proto && buf lint
 
+# Throwaway Postgres for the shortener tests. Each test creates its own database
+# on it. wal_level=logical lets the outbox test read the WAL.
+TEST_PG_PORT ?= 55432
+export SHORTENER_TEST_DATABASE_URL ?= postgres://postgres:postgres@localhost:$(TEST_PG_PORT)/postgres?sslmode=disable
+
+.PHONY: test-pg
+test-pg:
+	@docker ps --filter name=^url-shortener-test-pg$$ --format '{{.Names}}' | grep -qx url-shortener-test-pg || \
+		docker run -d --rm --name url-shortener-test-pg -p $(TEST_PG_PORT):5432 \
+			-e POSTGRES_PASSWORD=postgres postgres:16-alpine -c wal_level=logical >/dev/null
+	@until docker exec url-shortener-test-pg pg_isready -U postgres -h localhost >/dev/null 2>&1; do sleep 0.5; done
+
 .PHONY: test
-test:
+test: test-pg
 	@for s in $(GO_MODULES); do \
 		echo "==> test services/$$s"; \
 		(cd services/$$s && go test ./... -race -count=1) || exit $$?; \
@@ -128,19 +140,49 @@ k8s-delete:
 	kubectl delete -k k8s/base --ignore-not-found
 
 .PHONY: k8s-up
-k8s-up: docker-build kind-load k8s-apply
+k8s-up: docker-build kind-load k8s-apply obs-up
+
+# ----- Observability (Prometheus, Loki, Grafana) -----
+
+.PHONY: obs-up obs-down grafana
+obs-up:
+	kubectl apply -k k8s/observability
+	@for d in prometheus kube-state-metrics loki alloy grafana; do \
+		kubectl -n observability rollout status deployment/$$d --timeout=300s || exit $$?; \
+	done
+	@echo "Grafana: run 'make grafana', then open http://localhost:3000"
+
+obs-down:
+	kubectl delete -k k8s/observability --ignore-not-found
+
+grafana:
+	kubectl -n observability port-forward svc/grafana 3000:3000
+
+# ----- Usage simulator -----
+# Runs on this machine and enters the cluster through the kind ingress on
+# localhost:80. Pass flags with SIM_ARGS, for example:
+#   make simulate SIM_ARGS="-users 100 -duration 5m"
+#   make simulate SIM_ARGS="-target http://localhost:8080 -host ''"   # against Tilt
+
+SIM_ARGS ?=
+
+.PHONY: simulate simulate-chaos
+simulate:
+	cd services/loadgen && go run ./cmd/simulate $(SIM_ARGS)
+
+# Random drift, flash-crowd spikes (3-8x users, one viral link) and lulls.
+simulate-chaos:
+	cd services/loadgen && go run ./cmd/simulate -chaos $(SIM_ARGS)
 
 # ----- Integration tests -----
 
-.PHONY: dev-up dev-down dev-status
+# Local dev runs on Tilt (Tiltfile + compose.yaml). UI at http://localhost:10350.
+.PHONY: dev-up dev-down
 dev-up:
-	./scripts/dev-up.sh
+	tilt up
 
 dev-down:
-	./scripts/dev-down.sh
-
-dev-status:
-	./scripts/dev-status.sh
+	tilt down
 
 .PHONY: integration-test
 integration-test:

@@ -2,133 +2,352 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>URL Shortener — Architecture</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>URL Shortener Architecture</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      --fg: #1a1a1a;
-      --muted: #555;
-      --bg: #fafafa;
-      --panel: #fff;
-      --border: #e2e2e2;
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --fg: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --accent: #4f46e5;
+      --chip-bg: #eef2ff;
+      --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px rgba(15, 23, 42, .06);
     }
     @media (prefers-color-scheme: dark) {
-      :root {
-        --fg: #e8e8e8;
-        --muted: #aaa;
-        --bg: #121212;
-        --panel: #1a1a1a;
-        --border: #2a2a2a;
+      :root:not([data-theme="light"]) {
+        --bg: #0b1020;
+        --panel: #111832;
+        --fg: #e2e8f0;
+        --muted: #94a3b8;
+        --border: #1e293b;
+        --accent: #818cf8;
+        --chip-bg: #1e1b4b;
+        --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35);
       }
     }
-    html, body { margin: 0; padding: 0; }
+    :root[data-theme="dark"] {
+      --bg: #0b1020;
+      --panel: #111832;
+      --fg: #e2e8f0;
+      --muted: #94a3b8;
+      --border: #1e293b;
+      --accent: #818cf8;
+      --chip-bg: #1e1b4b;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-      color: var(--fg);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       background: var(--bg);
-      line-height: 1.5;
+      color: var(--fg);
+      line-height: 1.55;
     }
-    main {
-      max-width: 1200px;
-      margin: 2rem auto;
-      padding: 0 1.5rem 4rem;
+    main { max-width: 1280px; margin: 0 auto; padding: 40px 16px 64px; }
+    header { margin-bottom: 28px; }
+    .eyebrow {
+      font: 500 12px/1 "JetBrains Mono", monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--accent);
     }
-    h1 { font-size: 1.5rem; margin-bottom: .25rem; }
-    .subtitle { color: var(--muted); margin-top: 0; }
+    h1 { font-size: clamp(26px, 4vw, 36px); margin: 10px 0 8px; letter-spacing: -.02em; }
+    .lede { color: var(--muted); max-width: 760px; margin: 0; }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    nav a {
+      font-size: 13px;
+      color: var(--accent);
+      background: var(--chip-bg);
+      padding: 6px 12px;
+      border-radius: 999px;
+      text-decoration: none;
+    }
+    nav a:hover { text-decoration: underline; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 24px;
+      margin-top: 24px;
+    }
+    section h2 { margin: 0 0 6px; font-size: 20px; letter-spacing: -.01em; }
+    section > p { color: var(--muted); margin: 0 0 16px; max-width: 820px; }
+    .diagram { overflow-x: auto; padding: 8px 0; }
+    .diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+    .diagram.wide svg { min-width: 900px; }
     .legend {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: .5rem 1.5rem;
-      padding: 1rem 1.25rem;
-      border: 1px solid var(--border);
-      background: var(--panel);
-      border-radius: 6px;
-      margin: 1.5rem 0;
-      font-size: .9rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 22px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      font-size: 13px;
+      color: var(--muted);
     }
-    .legend code { background: transparent; }
-    .diagram-wrap {
-      border: 1px solid var(--border);
-      background: var(--panel);
-      border-radius: 6px;
-      padding: 1.5rem;
-      overflow-x: auto;
-    }
-    .mermaid { text-align: center; }
-    .mermaid svg { max-width: 100%; height: auto; }
-    footer { color: var(--muted); font-size: .85rem; margin-top: 2rem; }
+    .legend span { display: inline-flex; align-items: center; gap: 8px; }
+    .sw { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid; display: inline-block; }
+    .ln { width: 26px; height: 0; display: inline-block; border-top: 2px solid var(--muted); }
+    .ln.thick { border-top-width: 4px; }
+    .ln.dot { border-top-style: dotted; }
+    code { font-family: "JetBrains Mono", monospace; font-size: .9em; }
+    footer { color: var(--muted); font-size: 13px; margin-top: 32px; }
+    @media (max-width: 640px) { section { padding: 16px; } }
   </style>
 </head>
 <body>
   <main>
-    <h1>URL Shortener — Architecture</h1>
-    <p class="subtitle">Event-sourced, multi-language, deliberately over-engineered.</p>
+    <header>
+      <div class="eyebrow">unnecessary-complexity</div>
+      <h1>URL shortener architecture</h1>
+      <p class="lede">A write side on Postgres with a transactional outbox. Debezium reads the outbox from the WAL into Kafka. Read and analytics sides keep their own SQLite stores, and an observability stack runs next to the app in the same kind cluster.</p>
+      <nav>
+        <a href="#system">System</a>
+        <a href="#life">Life of a link</a>
+        <a href="#run">Ways to run it</a>
+      </nav>
+    </header>
 
-    <ul class="legend">
-      <li><strong>Solid arrow</strong> — synchronous RPC (Connect / gRPC)</li>
-      <li><strong>Dotted arrow</strong> — HTTP 302 redirect</li>
-      <li><strong>Thick arrow</strong> — async Kafka event</li>
-      <li><strong>Cylinder</strong> — per-service SQLite store</li>
-    </ul>
+    <section id="system">
+      <h2>System</h2>
+      <p>Every request enters through the gateway. The shortener writes the row and its event in one transaction, so there is no dual write. Debezium publishes the event, and the resolver and analytics catch up from Kafka.</p>
+      <div class="diagram"><pre class="mermaid">
+flowchart TB
+  subgraph OUT[&quot;Outside the cluster&quot;]
+    direction LR
+    Browser[&quot;Browser&lt;br/&gt;shell + 6 MF remotes&quot;]
+    Sim[&quot;Usage simulator&lt;br/&gt;make simulate(-chaos)&quot;]
+    Dev[&quot;You&lt;br/&gt;make grafana&quot;]
+  end
 
-    <div class="diagram-wrap">
-      <pre class="mermaid">
+  subgraph APP[&quot;ns url-shortener&quot;]
+    direction TB
+    ING[&quot;nginx ingress&lt;br/&gt;url-shortener.local/api&quot;]
+    GW[&quot;gateway&lt;br/&gt;Connect · gRPC-Web · GET /:code → 302&quot;]
+
+    subgraph WRITE[&quot;Write side&quot;]
+      direction LR
+      SH[&quot;shortener&lt;br/&gt;batched writes&quot;]
+      PG[(&quot;Postgres&lt;br/&gt;short_urls + outbox&quot;)]
+      DBZ[&quot;Kafka Connect&lt;br/&gt;Debezium EventRouter&quot;]
+    end
+
+    subgraph BUS[&quot;Kafka&quot;]
+      direction LR
+      T1[/&quot;short_urls.created&quot;/]
+      T2[/&quot;clicks.recorded&quot;/]
+    end
+
+    subgraph READ[&quot;Read side&quot;]
+      direction LR
+      RS[&quot;resolver&quot;]
+      RSDB[(&quot;resolver.db&quot;)]
+      AN[&quot;analytics&quot;]
+      ANDB[(&quot;analytics.db&quot;)]
+    end
+  end
+
+  subgraph OBS[&quot;ns observability&quot;]
+    direction LR
+    KSM[&quot;kube-state-metrics&quot;]
+    PROM[&quot;Prometheus&quot;]
+    ALLOY[&quot;Grafana Alloy&quot;]
+    LOKI[&quot;Loki&quot;]
+    GRAF[&quot;Grafana&lt;br/&gt;URL shortener dashboard&quot;]
+  end
+
+  Browser --&gt; ING
+  Sim --&gt; ING
+  ING --&gt; GW
+  GW --&gt;|&quot;Shorten · Get&quot;| SH
+  GW --&gt;|&quot;Resolve&quot;| RS
+  GW --&gt;|&quot;Stats&quot;| AN
+
+  SH --&gt;|&quot;one tx: row + outbox&quot;| PG
+  PG -.-&gt;|&quot;WAL · logical slot&quot;| DBZ
+  DBZ ==&gt;|&quot;proto event&quot;| T1
+  T1 ==&gt;|&quot;hydrate cache&quot;| RS
+  RS --- RSDB
+  RS ==&gt;|&quot;click · async&quot;| T2
+  T2 ==&gt;|&quot;fact table&quot;| AN
+  AN --- ANDB
+
+  APP -.-&gt;|&quot;/metrics :9090 · cAdvisor&quot;| PROM
+  APP -.-&gt;|&quot;pod logs&quot;| ALLOY
+  KSM --&gt; PROM
+  ALLOY --&gt; LOKI
+  PROM --&gt; GRAF
+  LOKI --&gt; GRAF
+  Dev --&gt; GRAF
+
+  classDef edge fill:#eef2ff,stroke:#4f46e5,color:#1e1b4b
+  classDef svc fill:#ecfdf5,stroke:#059669,color:#064e3b
+  classDef store fill:#fff7ed,stroke:#ea580c,color:#431407
+  classDef bus fill:#fdf4ff,stroke:#a21caf,color:#4a044e
+  classDef obs fill:#f1f5f9,stroke:#475569,color:#0f172a
+  classDef ext fill:#fefce8,stroke:#ca8a04,color:#422006
+  class ING,GW edge
+  class SH,RS,AN,DBZ svc
+  class PG,RSDB,ANDB store
+  class T1,T2 bus
+  class PROM,KSM,ALLOY,LOKI,GRAF obs
+  class Browser,Sim,Dev ext
+  style OUT fill:transparent,stroke:#ca8a04,stroke-dasharray:4 4
+  style APP fill:transparent,stroke:#4f46e5
+  style OBS fill:transparent,stroke:#475569
+  style WRITE fill:transparent,stroke:#059669,stroke-dasharray:3 3
+  style READ fill:transparent,stroke:#059669,stroke-dasharray:3 3
+  style BUS fill:transparent,stroke:#a21caf,stroke-dasharray:3 3
+      </pre></div>
+      <div class="legend">
+        <span><i class="sw" style="background:#fefce8;border-color:#ca8a04"></i>outside the cluster</span>
+        <span><i class="sw" style="background:#eef2ff;border-color:#4f46e5"></i>edge</span>
+        <span><i class="sw" style="background:#ecfdf5;border-color:#059669"></i>service</span>
+        <span><i class="sw" style="background:#fff7ed;border-color:#ea580c"></i>store</span>
+        <span><i class="sw" style="background:#fdf4ff;border-color:#a21caf"></i>Kafka topic</span>
+        <span><i class="sw" style="background:#f1f5f9;border-color:#475569"></i>observability</span>
+        <span><i class="ln"></i>sync RPC</span>
+        <span><i class="ln thick"></i>async event</span>
+        <span><i class="ln dot"></i>WAL, scrape, logs</span>
+      </div>
+    </section>
+
+    <section id="life">
+      <h2>Life of a link</h2>
+      <p>The shorten response returns before any event moves. The resolver gets the link about a second later, at least once. A click returns a 302 right away and records the click in the background.</p>
+      <div class="diagram wide"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor U as User
+  participant GW as gateway
+  participant SH as shortener
+  participant PG as Postgres
+  participant DBZ as Debezium
+  participant K as Kafka
+  participant RS as resolver
+  participant AN as analytics
+
+  rect rgba(5, 150, 105, 0.08)
+  Note over U,PG: Write: one transaction, no dual write
+  U-&gt;&gt;GW: POST Shorten {longUrl, ownerId, idempotencyKey}
+  GW-&gt;&gt;SH: gRPC Shorten
+  SH-&gt;&gt;SH: queue in write batch (≤10ms)
+  SH-&gt;&gt;PG: BEGIN · INSERT short_urls · INSERT outbox · DELETE outbox · COMMIT
+  SH--&gt;&gt;GW: code, created=true
+  GW--&gt;&gt;U: 200 {code}
+  end
+
+  rect rgba(162, 28, 175, 0.08)
+  Note over PG,RS: Propagate: at least once, about a second
+  PG--)DBZ: WAL insert on outbox (publication: insert only)
+  DBZ--)K: short_urls.created · key=code · value=proto bytes
+  K--)RS: consume
+  RS-&gt;&gt;RS: upsert into resolver.db
+  end
+
+  rect rgba(79, 70, 229, 0.08)
+  Note over U,AN: Read: redirect, then count the click
+  U-&gt;&gt;GW: GET /code
+  GW-&gt;&gt;RS: gRPC Resolve
+  RS--&gt;&gt;GW: long URL
+  GW--&gt;&gt;U: 302 Location: long URL
+  RS--)K: clicks.recorded (async, 5s timeout)
+  K--)AN: consume
+  AN-&gt;&gt;AN: insert into clicks
+  end
+      </pre></div>
+    </section>
+
+    <section id="run">
+      <h2>Ways to run it</h2>
+      <p>Tilt runs the infra in Docker Compose and the services on the host, and restarts each service when its code changes. The kind cluster runs the same app from images, plus the observability stack. The simulator can target either one.</p>
+      <div class="diagram"><pre class="mermaid">
 flowchart LR
-  subgraph FE["Browser (Module Federation)"]
+  subgraph TILT[&quot;Local dev · tilt up&quot;]
     direction TB
-    Shell["shell host :5173"]
-    Remotes["5 MF remotes<br/>url-input · create-button<br/>copy-button · url-list<br/>analytics-chart"]
-    PW["proto-web<br/>Connect-Web clients"]
-    Shell --> Remotes
-    Shell --> PW
-    Remotes --> PW
+    TC[&quot;compose.yaml&lt;br/&gt;Kafka · Postgres · Kafka Connect&quot;]
+    TH[&quot;host processes&lt;br/&gt;go run per service · rsbuild dev servers&quot;]
+    TR[&quot;one-shot resources&lt;br/&gt;kafka-topics · debezium-connector&quot;]
+    TC --&gt; TR
+    TH --&gt; TR
   end
 
-  GW["gateway :18080<br/>Connect + gRPC-Web<br/>GET /:code → 302"]
-
-  subgraph BE["Go backends"]
+  subgraph KIND[&quot;Cluster · kind&quot;]
     direction TB
-    SH["shortener<br/>write side"]
-    RS["resolver<br/>read side"]
-    AN["analytics<br/>stats RPC"]
-    SHDB[("shortener.db")]
-    RSDB[("resolver.db")]
-    ANDB[("analytics.db")]
-    SH --- SHDB
-    RS --- RSDB
-    AN --- ANDB
+    KB[&quot;k8s/base&lt;br/&gt;app · Kafka · Postgres · Connect&quot;]
+    KO[&quot;k8s/observability&lt;br/&gt;Prometheus · Loki · Alloy · Grafana&quot;]
+    KJ[&quot;Jobs&lt;br/&gt;kafka-topics · register-shortener-outbox&quot;]
+    KB --&gt; KJ
   end
 
-  subgraph K["Kafka"]
-    direction TB
-    T1[/"short_urls.created"/]
-    T2[/"clicks.recorded"/]
-  end
+  CMD1([&quot;tilt up&quot;]) --&gt; TILT
+  CMD2([&quot;make k8s-up&quot;]) --&gt; KIND
+  CMD3([&quot;make integration-test&quot;]) --&gt; KB
+  CMD4([&quot;make simulate&quot;]) --&gt;|&quot;localhost:80 · Host: url-shortener.local&quot;| KB
+  CMD4 -.-&gt;|&quot;-target localhost:8080 -host &#x27;&#x27;&quot;| TH
 
-  PW -->|"HTTPS Connect-Web"| GW
-  GW -.->|"302 redirect"| FE
-  GW -->|"gRPC Shorten"| SH
-  GW -->|"gRPC Resolve"| RS
-  GW -->|"gRPC Stats"| AN
+  classDef cmd fill:#eef2ff,stroke:#4f46e5,color:#1e1b4b
+  classDef box fill:#ecfdf5,stroke:#059669,color:#064e3b
+  class CMD1,CMD2,CMD3,CMD4 cmd
+  class TC,TH,TR,KB,KO,KJ box
+  style TILT fill:transparent,stroke:#059669,stroke-dasharray:4 4
+  style KIND fill:transparent,stroke:#4f46e5
+      </pre></div>
+    </section>
 
-  SH ==>|"publish"| T1
-  T1 ==>|"consume hydrate"| RS
-  RS ==>|"publish async"| T2
-  T2 ==>|"consume"| AN
-      </pre>
-    </div>
-
-    <footer>Source: <code>docs/diagram.html</code> — open directly in a browser, no build needed.</footer>
+    <footer>Source: <code>docs/diagram.html</code>. Open it directly in a browser; no build step.</footer>
   </main>
 
   <script type="module">
-    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-    const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-    mermaid.initialize({
-      startOnLoad: true,
-      theme: dark ? 'dark' : 'default',
-      securityLevel: 'loose',
-      flowchart: { htmlLabels: true, curve: 'basis' }
-    });
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs';
+
+    const blocks = [...document.querySelectorAll('pre.mermaid')];
+    blocks.forEach(b => { b.dataset.src = b.textContent; });
+    const media = matchMedia('(prefers-color-scheme: dark)');
+
+    function isDark() {
+      const forced = document.documentElement.dataset.theme;
+      return forced ? forced === 'dark' : media.matches;
+    }
+
+    async function render() {
+      const dark = isDark();
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'loose',
+        theme: 'base',
+        themeVariables: dark ? {
+          background: '#111832', primaryColor: '#1e293b', primaryTextColor: '#e2e8f0',
+          primaryBorderColor: '#475569', lineColor: '#94a3b8', textColor: '#e2e8f0',
+          clusterBkg: 'transparent', edgeLabelBackground: '#1e293b',
+          actorBkg: '#1e293b', actorBorder: '#818cf8', actorTextColor: '#e2e8f0',
+          signalColor: '#cbd5e1', signalTextColor: '#e2e8f0', labelTextColor: '#e2e8f0',
+          noteBkgColor: '#312e81', noteTextColor: '#e0e7ff', noteBorderColor: '#818cf8',
+          sequenceNumberColor: '#0b1020', fontFamily: 'Inter, system-ui, sans-serif'
+        } : {
+          background: '#ffffff', primaryColor: '#f8fafc', primaryTextColor: '#0f172a',
+          primaryBorderColor: '#94a3b8', lineColor: '#475569', textColor: '#0f172a',
+          clusterBkg: 'transparent', edgeLabelBackground: '#ffffff',
+          actorBkg: '#eef2ff', actorBorder: '#4f46e5', actorTextColor: '#1e1b4b',
+          signalColor: '#334155', signalTextColor: '#0f172a', labelTextColor: '#0f172a',
+          noteBkgColor: '#fef9c3', noteTextColor: '#422006', noteBorderColor: '#ca8a04',
+          sequenceNumberColor: '#ffffff', fontFamily: 'Inter, system-ui, sans-serif'
+        },
+        flowchart: { htmlLabels: true, curve: 'basis', padding: 12 },
+        sequence: { mirrorActors: false, showSequenceNumbers: true }
+      });
+      blocks.forEach(b => { b.removeAttribute('data-processed'); b.textContent = b.dataset.src; });
+      await mermaid.run({ nodes: blocks });
+    }
+
+    // Mermaid sizes boxes from text width, so wait for Inter; otherwise labels clip.
+    document.fonts.ready.then(render);
+    media.addEventListener('change', render);
   </script>
 </body>
 </html>

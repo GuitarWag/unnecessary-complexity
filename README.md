@@ -132,6 +132,15 @@ The invalid requests cover 18 probes: bad URLs, oversized fields, NUL bytes, mal
 
 The simulator prints each phase change as a `[chaos]` line, so you can match it to the dashboard. Against Tilt, use `SIM_ARGS="-target http://localhost:8080 -host ''"`.
 
+## Secrets
+
+In the kind cluster, the Postgres password lives in Vault, and no manifest contains it:
+- **Vault** (`k8s/secrets`) holds `secret/url-shortener/postgres`. `scripts/vault-bootstrap.sh` generates the password on a fresh cluster.
+- **External Secrets Operator**, installed with Helm, logs in to Vault through the Kubernetes auth method as the `vault-reader` service account. It copies the value into the k8s Secret `postgres-credentials` and refreshes it every minute.
+- **Workloads** read the k8s Secret through `secretKeyRef` and never talk to Vault. The shortener gets `PGPASSWORD`, which pgx reads, so its URL carries no password. Kafka Connect resolves `${env:PGPASSWORD}` in the connector config with `EnvVarConfigProvider`, so the password stays out of the connector JSON, the Connect REST API and the `connect_configs` topic.
+
+`make k8s-up` runs `make secrets-up` before the app. Vault runs in dev mode, in memory, so run `make secrets-up` again after the Vault pod restarts. The script restores the password from the synced Secret and keeps Postgres in step. Tilt dev uses a fixed local password.
+
 ## Things worth reading
 
 - **Idempotency contract** (`services/shortener/internal/service`). No key → fresh row every call. Same `(owner_id, idempotency_key)` → returns the previously created row. Same key, different owners → two distinct rows (key is scoped to owner via a partial unique index). Race resolver: the loser catches `ErrDuplicateIdempotencyKey` and re-reads to return the winner's code.

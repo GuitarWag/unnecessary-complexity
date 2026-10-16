@@ -42,8 +42,14 @@ spec:
               value: ":9090"
             - name: SHORTENER_ADDR
               value: ":50051"
+            # No password in the URL: pgx reads PGPASSWORD from the environment.
             - name: SHORTENER_DATABASE_URL
-              value: "postgres://postgres:postgres@postgres:5432/shortener?sslmode=disable"
+              value: "postgres://postgres@postgres:5432/shortener?sslmode=disable"
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
           readinessProbe:
             tcpSocket: { port: 50051 }
             initialDelaySeconds: 5

@@ -4,7 +4,7 @@
   "database.hostname": "postgres",
   "database.port": "5432",
   "database.user": "postgres",
-  "database.password": "postgres",
+  "database.password": "${env:PGPASSWORD}",
   "database.dbname": "shortener",
   "topic.prefix": "shortener",
   "plugin.name": "pgoutput",

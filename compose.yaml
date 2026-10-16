@@ -58,6 +58,10 @@ services:
       CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      # Same as k8s: the connector JSON reads ${env:PGPASSWORD}.
+      CONNECT_CONFIG_PROVIDERS: env
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      PGPASSWORD: postgres
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8083/connectors"]
       interval: 5s

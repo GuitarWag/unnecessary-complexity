@@ -5,6 +5,7 @@ namespace: url-shortener
 
 resources:
   - namespace.yaml
+  - secrets/secrets.yaml
   - kafka/kafka.yaml
   - postgres/postgres.yaml
   - debezium/kafka-connect.yaml

@@ -48,6 +48,18 @@ spec:
               value: "1"
             - name: CONNECT_STATUS_STORAGE_REPLICATION_FACTOR
               value: "1"
+            # The connector config says ${env:PGPASSWORD}; this provider fills it in
+            # when the task starts, so the password is not in the JSON, the REST API
+            # or the connect_configs topic. A new password needs a Connect restart.
+            - name: CONNECT_CONFIG_PROVIDERS
+              value: env
+            - name: CONNECT_CONFIG_PROVIDERS_ENV_CLASS
+              value: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
           readinessProbe:
             httpGet: { path: /connectors, port: 8083 }
             initialDelaySeconds: 15
@@ -71,7 +83,10 @@ spec:
           image: postgres:16-alpine
           env:
             - name: PGPASSWORD
-              value: postgres
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
           command:
             - sh
             - -c

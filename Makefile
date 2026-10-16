@@ -131,6 +131,20 @@ kind-load:
 		kind load docker-image $(DOCKER_REGISTRY)/$$s:$(DOCKER_TAG) --name $(KIND_CLUSTER) || exit $$?; \
 	done
 
+# ----- Secrets (Vault + External Secrets Operator) -----
+# k8s/base reads the Postgres password from a Secret that ESO syncs from Vault,
+# so this must run before k8s-apply. Run it again after the Vault pod restarts.
+
+ESO_CHART_VERSION ?= 2.12.0
+
+.PHONY: secrets-up
+secrets-up:
+	helm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || true
+	helm upgrade --install external-secrets external-secrets/external-secrets \
+		--version $(ESO_CHART_VERSION) -n external-secrets --create-namespace --wait --timeout 5m
+	kubectl apply -k k8s/secrets
+	./scripts/vault-bootstrap.sh
+
 .PHONY: k8s-apply
 k8s-apply:
 	kubectl apply -k k8s/base
@@ -140,7 +154,7 @@ k8s-delete:
 	kubectl delete -k k8s/base --ignore-not-found
 
 .PHONY: k8s-up
-k8s-up: docker-build kind-load k8s-apply obs-up
+k8s-up: docker-build kind-load secrets-up k8s-apply obs-up
 
 # ----- Observability (Prometheus, Loki, Grafana) -----
 

@@ -152,6 +152,12 @@ flowchart TB
     end
   end
 
+  subgraph SEC[&quot;ns vault · external-secrets&quot;]
+    direction TB
+    VAULT[(&quot;Vault&lt;br/&gt;secret/url-shortener/postgres&quot;)]
+    ESO[&quot;External Secrets Operator&quot;]
+  end
+
   subgraph OBS[&quot;ns observability&quot;]
     direction LR
     KSM[&quot;kube-state-metrics&quot;]
@@ -161,6 +167,8 @@ flowchart TB
     GRAF[&quot;Grafana&lt;br/&gt;URL shortener dashboard&quot;]
   end
 
+  VAULT -.-&gt;|&quot;k8s auth · read&quot;| ESO
+  ESO -.-&gt;|&quot;Secret postgres-credentials&quot;| APP
   Browser --&gt; ING
   Sim --&gt; ING
   ING --&gt; GW
@@ -196,10 +204,13 @@ flowchart TB
   class PG,RSDB,ANDB store
   class T1,T2 bus
   class PROM,KSM,ALLOY,LOKI,GRAF obs
+  class ESO svc
+  class VAULT store
   class Browser,Sim,Dev ext
   style OUT fill:transparent,stroke:#ca8a04,stroke-dasharray:4 4
   style APP fill:transparent,stroke:#4f46e5
   style OBS fill:transparent,stroke:#475569
+  style SEC fill:transparent,stroke:#ea580c,stroke-dasharray:4 4
   style WRITE fill:transparent,stroke:#059669,stroke-dasharray:3 3
   style READ fill:transparent,stroke:#059669,stroke-dasharray:3 3
   style BUS fill:transparent,stroke:#a21caf,stroke-dasharray:3 3

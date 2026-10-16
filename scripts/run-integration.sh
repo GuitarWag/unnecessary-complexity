@@ -47,6 +47,8 @@ if [[ -z "${SKIP_BUILD:-}" ]]; then
 fi
 
 if [[ -z "${SKIP_DEPLOY:-}" ]]; then
+  echo "==> secrets: Vault + External Secrets Operator"
+  make secrets-up
   echo "==> applying manifests"
   kubectl apply -k k8s/base
 fi

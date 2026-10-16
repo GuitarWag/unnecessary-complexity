@@ -25,6 +25,7 @@ import (
 	"github.com/yld/url-shortener/services/analytics/internal/repo"
 	"github.com/yld/url-shortener/services/analytics/internal/service"
 	"github.com/yld/url-shortener/services/platform-events/events"
+	"github.com/yld/url-shortener/services/platform-events/metrics"
 	analyticsv1 "github.com/yld/url-shortener/services/proto/gen/analytics/v1"
 	eventsv1 "github.com/yld/url-shortener/services/proto/gen/events/v1"
 )
@@ -82,6 +83,7 @@ func run() error {
 	cfg := loadConfig()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	metrics.Serve(os.Getenv("METRICS_ADDR"), logger)
 
 	dsn := fmt.Sprintf("%s?_journal=WAL&_busy_timeout=5000&_foreign_keys=on", cfg.dbPath)
 	db, err := sql.Open("sqlite3", dsn)
@@ -100,7 +102,7 @@ func run() error {
 	r := repo.New(db)
 	srv := service.New(r)
 
-	gsrv := grpc.NewServer()
+	gsrv := grpc.NewServer(grpc.ChainUnaryInterceptor(metrics.UnaryServerInterceptor()))
 	analyticsv1.RegisterAnalyticsServiceServer(gsrv, srv)
 	hs := health.NewServer()
 	hs.SetServingStatus("analytics.v1.AnalyticsService", healthpb.HealthCheckResponse_SERVING)

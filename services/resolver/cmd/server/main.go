@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	"github.com/yld/url-shortener/services/platform-events/events"
+	"github.com/yld/url-shortener/services/platform-events/metrics"
 	eventsv1 "github.com/yld/url-shortener/services/proto/gen/events/v1"
 	resolverv1 "github.com/yld/url-shortener/services/proto/gen/resolver/v1"
 	"github.com/yld/url-shortener/services/resolver/internal/consumer"
@@ -86,6 +87,7 @@ func run() error {
 	cfg := loadConfig()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	metrics.Serve(os.Getenv("METRICS_ADDR"), logger)
 
 	dsn := fmt.Sprintf("%s?_journal=WAL&_busy_timeout=5000&_foreign_keys=on", cfg.dbPath)
 	db, err := sql.Open("sqlite3", dsn)
@@ -114,7 +116,7 @@ func run() error {
 
 	srv := service.New(r, publisher, service.WithLogger(logger))
 
-	gsrv := grpc.NewServer()
+	gsrv := grpc.NewServer(grpc.ChainUnaryInterceptor(metrics.UnaryServerInterceptor()))
 	resolverv1.RegisterResolverServiceServer(gsrv, srv)
 
 	hs := health.NewServer()
@@ -127,7 +129,9 @@ func run() error {
 		return fmt.Errorf("listen %s: %w", cfg.addr, err)
 	}
 
-	consumerErr := make(chan error, 1)
+	// A nil channel blocks forever in the select below, so a disabled consumer or
+	// HTTP server never looks like a clean exit.
+	var consumerErr, httpErr chan error
 	if len(cfg.kafkaBrokers) > 0 {
 		startOffset := kafka.FirstOffset
 		if cfg.consumerStart == "last" {
@@ -143,6 +147,7 @@ func run() error {
 			func() *eventsv1.ShortURLCreated { return &eventsv1.ShortURLCreated{} },
 			consumer.NewShortURLCreatedHandler(r),
 		)
+		consumerErr = make(chan error, 1)
 		go func() {
 			logger.Info("kafka consumer started", "topic", events.TopicShortURLCreated, "group", cfg.kafkaGroupID)
 			err := c.Run(ctx, func(decErr error) {
@@ -151,8 +156,6 @@ func run() error {
 			_ = c.Close()
 			consumerErr <- err
 		}()
-	} else {
-		close(consumerErr)
 	}
 
 	serveErr := make(chan error, 1)
@@ -165,11 +168,11 @@ func run() error {
 	}()
 
 	var httpSrv *http.Server
-	httpErr := make(chan error, 1)
 	if cfg.httpAddr != "" {
+		httpErr = make(chan error, 1)
 		mux := http.NewServeMux()
 		mux.Handle("/", httpserver.NewRedirectHandler(srv))
-		httpSrv = &http.Server{Addr: cfg.httpAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		httpSrv = &http.Server{Addr: cfg.httpAddr, Handler: metrics.HTTP(mux), ReadHeaderTimeout: 5 * time.Second}
 		go func() {
 			logger.Info("resolver HTTP redirect listening", "addr", cfg.httpAddr)
 			if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -177,8 +180,6 @@ func run() error {
 			}
 			close(httpErr)
 		}()
-	} else {
-		close(httpErr)
 	}
 
 	select {

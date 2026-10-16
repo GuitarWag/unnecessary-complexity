@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/yld/url-shortener/services/gateway/internal/handler"
+	"github.com/yld/url-shortener/services/platform-events/metrics"
 	analyticsv1 "github.com/yld/url-shortener/services/proto/gen/analytics/v1"
 	loadgenv1 "github.com/yld/url-shortener/services/proto/gen/loadgen/v1"
 	resolverv1 "github.com/yld/url-shortener/services/proto/gen/resolver/v1"
@@ -78,6 +79,7 @@ func run() error {
 	cfg := loadConfig()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	metrics.Serve(os.Getenv("METRICS_ADDR"), logger)
 
 	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),

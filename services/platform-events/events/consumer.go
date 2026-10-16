@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/yld/url-shortener/services/platform-events/metrics"
 )
 
 // KafkaReader is the subset of *kafka.Reader used by Consumer.
@@ -45,6 +48,7 @@ func (c *Consumer[T]) Run(ctx context.Context, onDecodeErr func(error)) error {
 
 		decoded := c.newMsg()
 		if err := proto.Unmarshal(msg.Value, decoded); err != nil {
+			metrics.ObserveEvent(msg.Topic, "decode_error", 0)
 			if onDecodeErr != nil {
 				onDecodeErr(fmt.Errorf("consumer: unmarshal: %w", err))
 			}
@@ -55,9 +59,12 @@ func (c *Consumer[T]) Run(ctx context.Context, onDecodeErr func(error)) error {
 			continue
 		}
 
+		start := time.Now()
 		if err := c.handler(ctx, string(msg.Key), decoded); err != nil {
+			metrics.ObserveEvent(msg.Topic, "handler_error", time.Since(start))
 			return fmt.Errorf("consumer: handler: %w", err)
 		}
+		metrics.ObserveEvent(msg.Topic, "ok", time.Since(start))
 		if err := c.r.CommitMessages(ctx, msg); err != nil {
 			return fmt.Errorf("consumer: commit: %w", err)
 		}

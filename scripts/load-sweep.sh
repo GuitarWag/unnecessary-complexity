@@ -14,7 +14,7 @@ WRITE_RATES=(${WRITE_RATES:-500 1000 2000 5000})
 command -v k6 >/dev/null 2>&1 || { echo "k6 not found; install with: brew install k6"; exit 1; }
 
 if ! curl -sf "$GATEWAY/healthz" >/dev/null; then
-  echo "gateway not responding at $GATEWAY/healthz — bring the stack up with 'make dev-up'"
+  echo "gateway not responding at $GATEWAY/healthz; bring the stack up with 'tilt up'"
   exit 1
 fi
 

@@ -1,7 +1,7 @@
-// Package batcher coalesces concurrent Insert calls into a single SQLite
-// transaction so that one fsync amortises across many writes. The trade is
+// Package batcher coalesces concurrent Insert calls into a single Postgres
+// transaction so that one WAL flush amortises across many writes. The trade is
 // per-call latency vs aggregate throughput: low-load callers wait up to
-// timeout for their batch to flush, but a busy shortener can hit the SQLite
+// timeout for their batch to flush, but a busy shortener can hit the
 // commit ceiling much harder.
 //
 // This is opt-in. The shortener constructs a WriteBatcher only when

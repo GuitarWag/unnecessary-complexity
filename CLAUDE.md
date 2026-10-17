@@ -16,20 +16,21 @@ make proto             # regenerate Go + Connect stubs from proto/. After this, 
                        #   (cd frontend && pnpm --filter @url-shortener/proto-web run generate)
 
 make ci                # buf lint + golangci-lint + go test -race + go build across every Go module
-make test              # tests only (all Go modules)
+make test              # tests only (all Go modules). Starts a throwaway Postgres in Docker (make test-pg)
 make lint              # lint only (all Go modules)
 make build             # build only
 
-make dev-up            # local dev: Kafka in Docker + 4 backends + 6 frontend dev servers
-make dev-down          # stop everything dev-up started
-make dev-status        # who's alive
+tilt up                # local dev: infra from compose.yaml + backends + frontends on the host. UI at :10350
+tilt down              # stop everything (compose volumes are kept)
 make integration-test  # spin up kind, deploy, port-forward, run tests/integration, tear down
 ```
 
 Single-package and single-test runs (Go modules are independent — `cd` first):
 
 ```
-cd services/shortener && go test ./internal/service -race -run TestShorten_SameKeyReturnsSameCode
+make test-pg && cd services/shortener && \
+  SHORTENER_TEST_DATABASE_URL='postgres://postgres:postgres@localhost:55432/postgres?sslmode=disable' \
+  go test ./internal/service -race -run TestShorten_SameKeyReturnsSameCode
 cd services/gateway   && go test ./internal/handler -race -count=1
 ```
 
@@ -43,7 +44,7 @@ pnpm --filter @url-shortener/mf-url-input run test
 pnpm --filter @url-shortener/shell run dev        # one app's dev server
 ```
 
-`make dev-up` knobs: `MINIMAL_FRONTEND=1` (only shell + mf-url-input), `SKIP_FRONTEND=1`, `SKIP_KAFKA=1`. Process state lives in `.run/` (gitignored): `.run/logs/<service>.log`, `.run/pids/<service>.pid`, `.run/data/*.db`. `make integration-test-only` runs the test suite against an already-deployed gateway exposed at `INTEGRATION_GATEWAY_URL` (defaults to `http://localhost:18080`).
+`tilt up -- --frontend=minimal` runs only shell + mf-url-input; `--frontend=none` runs no frontend. Each Go service is a Tilt `local_resource` running `go run ./cmd/server`. It restarts when its module, `services/proto` or `services/platform-events` changes, but not on `_test.go` edits. `tilt ci -- --frontend=none` brings the backends up and exits when all of them are healthy. Resolver and analytics SQLite files live in `.run/data/` (gitignored). `make dev-up` and `make dev-down` are aliases for `tilt up` and `tilt down`. `make integration-test-only` runs the test suite against an already-deployed gateway exposed at `INTEGRATION_GATEWAY_URL` (defaults to `http://localhost:18080`).
 
 ## Architecture
 
@@ -51,23 +52,33 @@ pnpm --filter @url-shortener/shell run dev        # one app's dev server
 
 Multi-module Go workspace via `go.work`. The proto stubs are their own module so every service depends on a single source of truth:
 
-- `services/proto/` — generated `*.pb.go`, `*_grpc.pb.go`, and Connect handlers (`*v1connect/`). Never edit by hand; rerun `make proto`.
-- `services/platform-events/` — Kafka publisher (`segmentio/kafka-go`), generic `Consumer[T proto.Message]`, in-memory `FakePublisher`/`KafkaWriter`/`KafkaReader` for tests, topic constants (`short_urls.created`, `clicks.recorded`).
-- `services/shortener/` — write side. Owns the canonical `short_urls` SQLite. Publishes `ShortURLCreated` after every successful insert.
-- `services/resolver/` — read side. Has its own SQLite, hydrated by consuming `short_urls.created`. On every successful resolve, asynchronously publishes `ClickRecorded`.
-- `services/analytics/` — consumes `clicks.recorded` into a clicks fact table; exposes a `Stats` RPC with daily aggregation and date filters.
-- `services/gateway/` — HTTP/Connect/gRPC-Web front door. Holds gRPC clients to all three backends, exposes them via Connect handlers (browser-compatible). Also owns the **`GET /<code>` 302 redirect** that turns short URLs into navigable links — this is the only HTTP handler outside the Connect surface.
-- `tests/integration/` — end-to-end tests with `//go:build integration`; never compiled by `make ci`. Run via `make integration-test`.
+- `services/proto/`: generated `*.pb.go`, `*_grpc.pb.go`, and Connect handlers (`*v1connect/`). Never edit by hand; rerun `make proto`.
+- `services/platform-events/`: Kafka publisher (`segmentio/kafka-go`), generic `Consumer[T proto.Message]`, in-memory `FakePublisher`/`KafkaWriter`/`KafkaReader` for tests, topic constants (`short_urls.created`, `clicks.recorded`).
+- `services/shortener/`: write side. Owns the canonical `short_urls` table in Postgres. Writes a `ShortURLCreated` outbox row in the same transaction as every insert. It has no Kafka client: Debezium publishes the event.
+- `services/resolver/`: read side. Has its own SQLite, hydrated by consuming `short_urls.created`. On every successful resolve, asynchronously publishes `ClickRecorded`.
+- `services/analytics/`: consumes `clicks.recorded` into a clicks fact table; exposes a `Stats` RPC with daily aggregation and date filters.
+- `services/gateway/`: HTTP/Connect/gRPC-Web front door. Holds gRPC clients to all three backends, exposes them via Connect handlers (browser-compatible). Also owns the **`GET /<code>` 302 redirect** that turns short URLs into navigable links. The resolver serves the same redirect directly on `RESOLVER_HTTP_ADDR`, which skips the gateway hop.
+- `tests/integration/`: end-to-end tests with `//go:build integration`; never compiled by `make ci`. Run via `make integration-test`.
 
 ### Data flow (event-sourced, deliberately decoupled)
 
 1. Browser → gateway (Connect-Web POST) → shortener (gRPC).
-2. Shortener writes its row, publishes `ShortURLCreated` (publish failure is logged, doesn't fail the RPC — write is the source of truth).
+2. Shortener writes its row and an outbox row in one transaction. Debezium (Kafka Connect) reads the outbox insert from the WAL and publishes `ShortURLCreated` to `short_urls.created`.
 3. Resolver's consumer receives it, upserts its local cache.
 4. Browser → `http://gateway/<code>` → gateway redirect handler → resolver `Resolve` → 302 to long URL. Resolver fires `ClickRecorded` async (5s timeout, separate context — caller's ctx is already done by then).
 5. Analytics consumer receives `ClickRecorded`, inserts into clicks table.
 
 This means: resolver and analytics are eventually consistent with shortener. Integration tests use `require.Eventually` with `INTEGRATION_PROPAGATION_TIMEOUT` (default 30s) to handle the lag.
+
+### Outbox + Debezium (non-obvious)
+
+- `repo.InsertBatch` inserts into `short_urls` and `outbox` with one CTE statement, then deletes the outbox rows before commit. The table is always empty. Debezium reads the INSERT from the WAL. The `shortener_outbox` publication is `publish = 'insert'`, so the DELETE never reaches Debezium.
+- Conflicts use `ON CONFLICT DO NOTHING` plus a lookup that finds which constraint was hit. Do not switch to a savepoint per row: a batch of 100 savepoints overflows the Postgres subtransaction cache.
+- `k8s/base/postgres/init.sql` creates the replication slot when Postgres initialises, and the connector uses `snapshot.mode=no_data`. Together they make Debezium stream from the slot when it has no stored offset. With `snapshot.mode=initial`, events written before the first offset commit are lost. This happened during the migration.
+- The connector uses `io.debezium.converters.BinaryDataConverter`. Kafka's `ByteArrayConverter` fails on the `ByteBuffer` that Debezium emits for `bytea`.
+- `k8s/base/debezium/shortener-outbox.json` is the single connector config for dev and k8s. Both reach Postgres at host `postgres`. Under Tilt, the `debezium-connector` resource registers the connector with PUT, and runs again when the JSON changes. In k8s, delete the `register-shortener-outbox` Job and apply again.
+- When Kafka Connect is down, the slot keeps WAL on the Postgres disk. `max_slot_wal_keep_size=512MB` caps this. Past the cap, Postgres invalidates the slot, Debezium stops, and the slot must be recreated: events in the gap are lost.
+- Shortener tests need `SHORTENER_TEST_DATABASE_URL`. `make test` sets it and starts the `url-shortener-test-pg` container. Without the variable, the tests fail. `internal/pgtest` creates one database per test. The outbox test reads the WAL through `test_decoding`.
 
 ### Shorten idempotency contract (non-obvious)
 
@@ -90,9 +101,31 @@ Six pnpm-workspace apps in `frontend/apps/`. `shell` is the host; the five `mf-*
 - Remote contracts are declared in `apps/shell/src/remotes.d.ts` (TypeScript ambient module declarations). Update this file when remote prop signatures change.
 - `frontend/packages/proto-web` exports `createClients({baseUrl})` returning `{shortener, resolver, analytics, transport}` Connect-Web clients. Every component that talks to the gateway accepts `clients?: Pick<Clients, '...'>` so tests can inject fakes.
 
+### Metrics, dashboard and simulator
+
+- `services/platform-events/metrics` is the one place for instruments. It provides the gRPC interceptor (`grpc_server_handling_seconds`), the HTTP middleware (`http_server_request_duration_seconds`), the consumer counters (`events_consumed_total`, `event_handle_seconds`) and `Serve`. `Serve` only listens when `METRICS_ADDR` is set. k8s sets `:9090`; Tilt leaves it unset.
+- The HTTP `route` label is the ServeMux pattern that matched, read from `r.Pattern` after the mux runs. Never label by `r.URL.Path`: every redirect code would become its own series. `metrics.HTTP` must wrap a handler that contains the ServeMux, and must sit inside `h2c`.
+- Prometheus finds the Go pods through the `prometheus.io/scrape` and `prometheus.io/port` annotations in `k8s/base`. A new service needs both annotations and `METRICS_ADDR`.
+- The dashboard is `k8s/observability/dashboards/url-shortener.json`, provisioned read-only into Grafana. To change it, edit it in Grafana, export the JSON over this file, and run `make obs-up`.
+- `services/loadgen/cmd/simulate` is a stdlib-only CLI, run with `make simulate`. It is separate from the loadgen gRPC service. Its `-settle` delay (default 2s) keeps clicks off links the resolver has not received yet. A burst of `miss` results means propagation is slower than settle. `-chaos` adds a conductor (`chaos.go`) that sets the active user count once per second, with drift, spikes and lulls. The simulator starts `-max-users` goroutines, and each one idles while its id is at or above that count. `conductor.step` is pure apart from its rng, and `TestConductor_SpikesLullsAndBounds` drives it through a simulated hour. With `-chaos`, `bad.go` adds invalid requests, sent by the abuser persona and during attack phases. A probe passes only on a 4xx. If you change validation, keep `probes` in step with it. Do not add an unknown-JSON-field probe: Connect accepts unknown fields on purpose.
+
+### Secrets (Vault + External Secrets Operator)
+
+- k8s reads the Postgres password only from the Secret `postgres-credentials`. ESO syncs it from Vault at `secret/url-shortener/postgres`, through `k8s/base/secrets/secrets.yaml`. Never put a credential literal in a manifest; add it to Vault and to the `ExternalSecret`.
+- `make secrets-up` installs ESO (Helm chart `ESO_CHART_VERSION`), applies Vault from `k8s/secrets`, and runs `scripts/vault-bootstrap.sh`. It must run before `k8s-apply`, because Postgres needs the Secret at initdb. The bootstrap is idempotent. Vault is the source of truth: if `postgres-0` exists, the script sets its password to match Vault.
+- Do not change the password in Vault by hand: Postgres keeps the old one, because it reads `POSTGRES_PASSWORD` only at initdb. `scripts/vault-bootstrap.sh` sets Vault and Postgres together.
+- Vault runs in dev mode, in memory, with root token `root`. This is local kind only. After a Vault restart, run `make secrets-up` again. It restores the password from the synced Secret, so nothing changes.
+- The connector JSON says `${env:PGPASSWORD}`, and both the k8s and the compose Kafka Connect set `CONNECT_CONFIG_PROVIDERS=env`. A changed password needs a Kafka Connect restart, because the provider reads the value when the task starts.
+- Tilt dev keeps the fixed password `postgres` in `compose.yaml` and the Tiltfile, because it is local only.
+
+### Surviving broker restarts
+
+- `events.Consumer.Run` retries fetch and commit errors with capped backoff (200ms to 10s) and returns only when ctx ends or the handler fails. Do not return on a fetch error: a broker blip then becomes a crash loop in k8s, and a dead process under Tilt, which does not restart a `serve_cmd`. Commits are retried, never skipped, because a skipped commit redelivers the message and the handler applies it twice. Retries show up as `events_consumed_total{result="fetch_error"}` and as "consumer error" warnings.
+- Kafka Connect runs one worker, so `CONNECT_SCHEDULED_REBALANCE_MAX_DELAY_MS=0`. The 5-minute default meant no events were published for 5 minutes after every broker restart.
+
 ### Kafka local dev gotcha
 
-The `apache/kafka:3.7.0` image we use in `scripts/dev-up.sh` does **not** auto-create topics on first publish (the `KAFKA_AUTO_CREATE_TOPICS_ENABLE=true` env doesn't behave like Bitnami's). The script pre-creates `short_urls.created` and `clicks.recorded` after Kafka is up. If you add a new topic, register it in `services/platform-events/events/topics.go` *and* in `scripts/dev-up.sh`'s topic-creation loop.
+The `apache/kafka:3.7.0` image we use in `compose.yaml` does **not** auto-create topics on first publish (the `KAFKA_AUTO_CREATE_TOPICS_ENABLE=true` env doesn't behave like Bitnami's). The Tiltfile's `kafka-topics` resource pre-creates `short_urls.created` and `clicks.recorded` after Kafka is up. k8s uses the same image, and the `kafka-topics` Job in `k8s/base/kafka/kafka.yaml` creates the topics. If you add a new topic, register it in `services/platform-events/events/topics.go`, in the Tiltfile's `kafka-topics` resource, and in that Job.
 
 ### Tests, build tags, and isolation
 

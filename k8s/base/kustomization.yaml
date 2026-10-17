@@ -5,7 +5,10 @@ namespace: url-shortener
 
 resources:
   - namespace.yaml
+  - secrets/secrets.yaml
   - kafka/kafka.yaml
+  - postgres/postgres.yaml
+  - debezium/kafka-connect.yaml
   - shortener/shortener.yaml
   - resolver/resolver.yaml
   - analytics/analytics.yaml
@@ -17,3 +20,13 @@ resources:
   - mf-url-list/mf-url-list.yaml
   - mf-analytics-chart/mf-analytics-chart.yaml
   - ingress/ingress.yaml
+
+configMapGenerator:
+  - name: postgres-init
+    files: [postgres/init.sql]
+  # No hash suffix: the registration Job's pod template is immutable, so a
+  # renamed ConfigMap would make `kubectl apply` fail.
+  - name: debezium-connector
+    files: [debezium/shortener-outbox.json]
+    options:
+      disableNameSuffixHash: true

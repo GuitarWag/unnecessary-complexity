@@ -1,0 +1,22 @@
+{
+  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+  "tasks.max": "1",
+  "database.hostname": "postgres",
+  "database.port": "5432",
+  "database.user": "postgres",
+  "database.password": "${env:PGPASSWORD}",
+  "database.dbname": "shortener",
+  "topic.prefix": "shortener",
+  "plugin.name": "pgoutput",
+  "slot.name": "shortener_outbox",
+  "snapshot.mode": "no_data",
+  "publication.name": "shortener_outbox",
+  "publication.autocreate.mode": "disabled",
+  "table.include.list": "public.outbox",
+  "tombstones.on.delete": "false",
+  "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+  "value.converter": "io.debezium.converters.BinaryDataConverter",
+  "transforms": "outbox",
+  "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+  "transforms.outbox.route.topic.replacement": "${routedByValue}"
+}

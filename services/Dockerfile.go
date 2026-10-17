@@ -5,16 +5,18 @@ FROM golang:1.26-bookworm AS builder
 ARG SERVICE
 WORKDIR /src
 
-# Copy go.work and all module dirs so the workspace resolves.
-COPY go.work ./go.work
+# go.work lives at the repo root, outside this build context. Each module's
+# replace directives point at ../proto and ../platform-events, so build without it.
+ENV GOWORK=off
 COPY proto ./proto
 COPY platform-events ./platform-events
 COPY shortener ./shortener
 COPY resolver ./resolver
 COPY analytics ./analytics
 COPY gateway ./gateway
+COPY loadgen ./loadgen
 
-# Build the requested service. CGO_ENABLED=1 is required for sqlite (pure-Go services use 0).
+# Build the requested service. CGO_ENABLED=1 is required for sqlite (resolver, analytics). The other services do not need it.
 WORKDIR /src/${SERVICE}
 ENV CGO_ENABLED=1
 RUN apt-get update \

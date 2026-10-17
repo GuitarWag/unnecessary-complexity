@@ -1,0 +1,51 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  # The Go services, found by the prometheus.io/* pod annotations in k8s/base.
+  # A pod with several container ports yields one target per port; after the
+  # address rewrite they collapse into one.
+  - job_name: url-shortener
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: { names: [url-shortener] }
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: service
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+
+  # Per-container CPU and memory, read from each kubelet through the API server.
+  - job_name: kubelet-cadvisor
+    scheme: https
+    authorization:
+      credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+      - source_labels: [__meta_kubernetes_node_name]
+        target_label: node
+
+  - job_name: kube-state-metrics
+    static_configs:
+      - targets: [kube-state-metrics:8080]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]

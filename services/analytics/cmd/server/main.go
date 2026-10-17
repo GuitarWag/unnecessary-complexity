@@ -25,6 +25,7 @@ import (
 	"github.com/yld/url-shortener/services/analytics/internal/repo"
 	"github.com/yld/url-shortener/services/analytics/internal/service"
 	"github.com/yld/url-shortener/services/platform-events/events"
+	"github.com/yld/url-shortener/services/platform-events/metrics"
 	analyticsv1 "github.com/yld/url-shortener/services/proto/gen/analytics/v1"
 	eventsv1 "github.com/yld/url-shortener/services/proto/gen/events/v1"
 )
@@ -82,6 +83,7 @@ func run() error {
 	cfg := loadConfig()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	metrics.Serve(os.Getenv("METRICS_ADDR"), logger)
 
 	dsn := fmt.Sprintf("%s?_journal=WAL&_busy_timeout=5000&_foreign_keys=on", cfg.dbPath)
 	db, err := sql.Open("sqlite3", dsn)
@@ -100,7 +102,7 @@ func run() error {
 	r := repo.New(db)
 	srv := service.New(r)
 
-	gsrv := grpc.NewServer()
+	gsrv := grpc.NewServer(grpc.ChainUnaryInterceptor(metrics.UnaryServerInterceptor()))
 	analyticsv1.RegisterAnalyticsServiceServer(gsrv, srv)
 	hs := health.NewServer()
 	hs.SetServingStatus("analytics.v1.AnalyticsService", healthpb.HealthCheckResponse_SERVING)
@@ -112,8 +114,11 @@ func run() error {
 		return fmt.Errorf("listen %s: %w", cfg.addr, err)
 	}
 
-	consumerErr := make(chan error, 1)
+	// Stays nil when the consumer is off: a nil channel blocks forever in the
+	// select below, where a closed one would read as a clean exit.
+	var consumerErr chan error
 	if len(cfg.kafkaBrokers) > 0 {
+		consumerErr = make(chan error, 1)
 		startOffset := kafka.FirstOffset
 		if cfg.consumerStart == "last" {
 			startOffset = kafka.LastOffset
@@ -130,13 +135,12 @@ func run() error {
 		)
 		go func() {
 			logger.Info("kafka consumer started", "topic", events.TopicClickRecorded, "group", cfg.kafkaGroupID)
-			err := c.Run(ctx, func(decErr error) { logger.Warn("decode error", "err", decErr) })
+			err := c.Run(ctx, func(err error) { logger.Warn("consumer error", "err", err) })
 			_ = c.Close()
 			consumerErr <- err
 		}()
 	} else {
 		logger.Warn("ANALYTICS_KAFKA_BROKERS unset; click events will not be consumed")
-		close(consumerErr)
 	}
 
 	serveErr := make(chan error, 1)

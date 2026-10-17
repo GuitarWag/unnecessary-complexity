@@ -1,15 +1,4 @@
 apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: shortener-data
-  namespace: url-shortener
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 1Gi
----
-apiVersion: v1
 kind: Service
 metadata:
   name: shortener
@@ -37,6 +26,9 @@ spec:
   template:
     metadata:
       labels: { app: shortener }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
     spec:
       containers:
         - name: server
@@ -46,15 +38,18 @@ spec:
             - containerPort: 50051
               name: grpc
           env:
+            - name: METRICS_ADDR
+              value: ":9090"
             - name: SHORTENER_ADDR
               value: ":50051"
-            - name: SHORTENER_DB
-              value: "/data/shortener.db"
-            - name: SHORTENER_KAFKA_BROKERS
-              value: "kafka-0.kafka.url-shortener.svc.cluster.local:9092"
-          volumeMounts:
-            - name: data
-              mountPath: /data
+            # No password in the URL: pgx reads PGPASSWORD from the environment.
+            - name: SHORTENER_DATABASE_URL
+              value: "postgres://postgres@postgres:5432/shortener?sslmode=disable"
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
           readinessProbe:
             tcpSocket: { port: 50051 }
             initialDelaySeconds: 5
@@ -62,7 +57,3 @@ spec:
             tcpSocket: { port: 50051 }
             initialDelaySeconds: 15
             periodSeconds: 20
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: shortener-data

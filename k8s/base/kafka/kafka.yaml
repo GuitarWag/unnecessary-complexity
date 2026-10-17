@@ -7,6 +7,8 @@ metadata:
 spec:
   selector: { app: kafka }
   clusterIP: None
+  # Lets kafka-0's DNS name resolve before the pod is ready.
+  publishNotReadyAddresses: true
   ports:
     - name: client
       port: 9092
@@ -31,35 +33,43 @@ spec:
       labels: { app: kafka }
     spec:
       terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: kafka
-          image: bitnami/kafka:3.8
+          image: apache/kafka:3.7.0
           ports:
             - containerPort: 9092
               name: client
             - containerPort: 9093
               name: controller
           env:
-            - name: KAFKA_CFG_NODE_ID
+            - name: CLUSTER_ID
+              value: "MkU3OEVBNTcwNTJENDM2Qk"
+            - name: KAFKA_NODE_ID
               value: "0"
-            - name: KAFKA_CFG_PROCESS_ROLES
-              value: controller,broker
-            - name: KAFKA_CFG_LISTENERS
+            - name: KAFKA_PROCESS_ROLES
+              value: broker,controller
+            - name: KAFKA_LISTENERS
               value: PLAINTEXT://:9092,CONTROLLER://:9093
-            - name: KAFKA_CFG_ADVERTISED_LISTENERS
+            - name: KAFKA_ADVERTISED_LISTENERS
               value: PLAINTEXT://kafka-0.kafka.url-shortener.svc.cluster.local:9092
-            - name: KAFKA_CFG_CONTROLLER_LISTENER_NAMES
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
               value: CONTROLLER
-            - name: KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
               value: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-            - name: KAFKA_CFG_CONTROLLER_QUORUM_VOTERS
-              value: 0@kafka-0.kafka.url-shortener.svc.cluster.local:9093
-            - name: KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE
-              value: "true"
-            - name: KAFKA_KRAFT_CLUSTER_ID
-              value: "ridiculously-overengineered-cluster"
-            - name: ALLOW_PLAINTEXT_LISTENER
-              value: "yes"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: 0@localhost:9093
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: PLAINTEXT
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_LOG_DIRS
+              value: /var/lib/kafka/data
           readinessProbe:
             tcpSocket: { port: 9092 }
             initialDelaySeconds: 15
@@ -70,7 +80,7 @@ spec:
             periodSeconds: 15
           volumeMounts:
             - name: data
-              mountPath: /bitnami/kafka
+              mountPath: /var/lib/kafka/data
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:
@@ -78,3 +88,27 @@ spec:
         resources:
           requests:
             storage: 2Gi
+---
+# apache/kafka does not auto-create topics for consumers. Same list as the Tiltfile's kafka-topics resource.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topics
+  namespace: url-shortener
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create
+          image: apache/kafka:3.7.0
+          command:
+            - sh
+            - -c
+            - >-
+              for t in short_urls.created clicks.recorded; do
+              until /opt/kafka/bin/kafka-topics.sh
+              --bootstrap-server kafka-0.kafka.url-shortener.svc.cluster.local:9092
+              --create --if-not-exists --topic "$t" --partitions 1 --replication-factor 1;
+              do sleep 3; done; done

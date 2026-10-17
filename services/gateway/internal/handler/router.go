@@ -7,6 +7,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/yld/url-shortener/services/platform-events/metrics"
 	"github.com/yld/url-shortener/services/proto/gen/analytics/v1/analyticsv1connect"
 	"github.com/yld/url-shortener/services/proto/gen/loadgen/v1/loadgenv1connect"
 	"github.com/yld/url-shortener/services/proto/gen/resolver/v1/resolverv1connect"
@@ -58,5 +59,6 @@ func (r Router) Build() http.Handler {
 		}).Handler(mux)
 	}
 
-	return h2c.NewHandler(handler, &http2.Server{})
+	// Inside h2c, so h2c can still hijack the connection for HTTP/2 upgrades.
+	return h2c.NewHandler(metrics.HTTP(handler), &http2.Server{})
 }

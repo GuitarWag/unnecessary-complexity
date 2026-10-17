@@ -37,6 +37,9 @@ spec:
   template:
     metadata:
       labels: { app: analytics }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
     spec:
       containers:
         - name: server
@@ -46,6 +49,8 @@ spec:
             - containerPort: 50053
               name: grpc
           env:
+            - name: METRICS_ADDR
+              value: ":9090"
             - name: ANALYTICS_ADDR
               value: ":50053"
             - name: ANALYTICS_DB

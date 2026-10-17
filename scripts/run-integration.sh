@@ -47,15 +47,20 @@ if [[ -z "${SKIP_BUILD:-}" ]]; then
 fi
 
 if [[ -z "${SKIP_DEPLOY:-}" ]]; then
+  echo "==> secrets: Vault + External Secrets Operator"
+  make secrets-up
   echo "==> applying manifests"
   kubectl apply -k k8s/base
 fi
 
-echo "==> waiting for Kafka and core deployments"
+echo "==> waiting for Kafka, Postgres and core deployments"
 kubectl -n "$NS" rollout status statefulset/kafka --timeout="$READY_TIMEOUT"
-for d in shortener resolver analytics gateway; do
+kubectl -n "$NS" wait --for=condition=complete job/kafka-topics --timeout="$READY_TIMEOUT"
+kubectl -n "$NS" rollout status statefulset/postgres --timeout="$READY_TIMEOUT"
+for d in shortener resolver analytics gateway kafka-connect; do
   kubectl -n "$NS" rollout status deployment/"$d" --timeout="$READY_TIMEOUT"
 done
+kubectl -n "$NS" wait --for=condition=complete job/register-shortener-outbox --timeout="$READY_TIMEOUT"
 
 PF_PID=""
 cleanup() {

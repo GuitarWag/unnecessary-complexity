@@ -51,6 +51,11 @@ spec:
             # The connector config says ${env:PGPASSWORD}; this provider fills it in
             # when the task starts, so the password is not in the JSON, the REST API
             # or the connect_configs topic. A new password needs a Connect restart.
+            # One worker: reassign connectors at once after a rebalance. The 5 min
+            # default waits for a lost worker to return, and after a broker restart
+            # that meant 5 min with no events published.
+            - name: CONNECT_SCHEDULED_REBALANCE_MAX_DELAY_MS
+              value: "0"
             - name: CONNECT_CONFIG_PROVIDERS
               value: env
             - name: CONNECT_CONFIG_PROVIDERS_ENV_CLASS

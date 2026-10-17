@@ -117,6 +117,11 @@ Six pnpm-workspace apps in `frontend/apps/`. `shell` is the host; the five `mf-*
 - The connector JSON says `${env:PGPASSWORD}`, and both the k8s and the compose Kafka Connect set `CONNECT_CONFIG_PROVIDERS=env`. A changed password needs a Kafka Connect restart, because the provider reads the value when the task starts.
 - Tilt dev keeps the fixed password `postgres` in `compose.yaml` and the Tiltfile, because it is local only.
 
+### Surviving broker restarts
+
+- `events.Consumer.Run` retries fetch and commit errors with capped backoff (200ms to 10s) and returns only when ctx ends or the handler fails. Do not return on a fetch error: a broker blip then becomes a crash loop in k8s, and a dead process under Tilt, which does not restart a `serve_cmd`. Commits are retried, never skipped, because a skipped commit redelivers the message and the handler applies it twice. Retries show up as `events_consumed_total{result="fetch_error"}` and as "consumer error" warnings.
+- Kafka Connect runs one worker, so `CONNECT_SCHEDULED_REBALANCE_MAX_DELAY_MS=0`. The 5-minute default meant no events were published for 5 minutes after every broker restart.
+
 ### Kafka local dev gotcha
 
 The `apache/kafka:3.7.0` image we use in `compose.yaml` does **not** auto-create topics on first publish (the `KAFKA_AUTO_CREATE_TOPICS_ENABLE=true` env doesn't behave like Bitnami's). The Tiltfile's `kafka-topics` resource pre-creates `short_urls.created` and `clicks.recorded` after Kafka is up. k8s uses the same image, and the `kafka-topics` Job in `k8s/base/kafka/kafka.yaml` creates the topics. If you add a new topic, register it in `services/platform-events/events/topics.go`, in the Tiltfile's `kafka-topics` resource, and in that Job.

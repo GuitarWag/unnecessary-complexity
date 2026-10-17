@@ -35,7 +35,7 @@ var (
 
 	eventsConsumed = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "events_consumed_total",
-		Help: "Kafka messages consumed by topic and result (ok, handler_error, decode_error).",
+		Help: "Kafka consume outcomes by topic and result (ok, handler_error, decode_error, fetch_error).",
 	}, []string{"topic", "result"})
 
 	eventHandle = promauto.NewHistogramVec(prometheus.HistogramOpts{

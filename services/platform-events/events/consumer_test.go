@@ -21,6 +21,9 @@ type fakeReader struct {
 	committed []kafka.Message
 	closed    bool
 	fetchErr  error
+	// fetchFails and commitFails make the next N calls fail, like a broker blip.
+	fetchFails  int
+	commitFails int
 }
 
 func (f *fakeReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
@@ -29,6 +32,11 @@ func (f *fakeReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
 		if f.fetchErr != nil {
 			f.mu.Unlock()
 			return kafka.Message{}, f.fetchErr
+		}
+		if f.fetchFails > 0 {
+			f.fetchFails--
+			f.mu.Unlock()
+			return kafka.Message{}, errors.New("read tcp: i/o timeout")
 		}
 		if len(f.queue) > 0 {
 			m := f.queue[0]
@@ -48,6 +56,10 @@ func (f *fakeReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
 func (f *fakeReader) CommitMessages(_ context.Context, msgs ...kafka.Message) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.commitFails > 0 {
+		f.commitFails--
+		return errors.New("group coordinator not available")
+	}
 	f.committed = append(f.committed, msgs...)
 	return nil
 }
@@ -190,4 +202,42 @@ func TestConsumer_ContextCancelExitsCleanly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.NoError(t, c.Run(ctx, nil))
+}
+
+// A broker blip must not end Run: before, one fetch error made the service exit
+// and Kubernetes crash-loop it. Commits are retried, not skipped, so a message
+// is handled once.
+func TestConsumer_RetriesFetchAndCommitErrors(t *testing.T) {
+	t.Parallel()
+	r := &fakeReader{fetchFails: 2, commitFails: 2}
+	r.push(t, "abc", &eventsv1.ShortURLCreated{Code: "abc", LongUrl: "https://a"})
+
+	var mu sync.Mutex
+	handled, reported := 0, 0
+	c := NewConsumer(r, func() *eventsv1.ShortURLCreated { return &eventsv1.ShortURLCreated{} },
+		func(context.Context, string, *eventsv1.ShortURLCreated) error {
+			mu.Lock()
+			handled++
+			mu.Unlock()
+			return nil
+		})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- c.Run(ctx, func(error) { mu.Lock(); reported++; mu.Unlock() })
+	}()
+
+	require.Eventually(t, func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return len(r.committed) == 1
+	}, 10*time.Second, 10*time.Millisecond)
+	cancel()
+	require.NoError(t, <-done)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, handled, "a retried commit must not re-run the handler")
+	assert.Equal(t, 4, reported, "two fetch and two commit failures")
 }

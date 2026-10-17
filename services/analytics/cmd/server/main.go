@@ -132,7 +132,7 @@ func run() error {
 		)
 		go func() {
 			logger.Info("kafka consumer started", "topic", events.TopicClickRecorded, "group", cfg.kafkaGroupID)
-			err := c.Run(ctx, func(decErr error) { logger.Warn("decode error", "err", decErr) })
+			err := c.Run(ctx, func(err error) { logger.Warn("consumer error", "err", err) })
 			_ = c.Close()
 			consumerErr <- err
 		}()

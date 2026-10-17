@@ -58,7 +58,7 @@ var probes = []probe{
 
 // sendBad sends one random probe. ok means the system rejected it with a 4xx.
 // Anything else is a finding and goes to warn, once per probe and status.
-func (c *client) sendBad(ctx context.Context, r *rand.Rand, warn func(string)) outcome {
+func (c *client) sendBad(ctx context.Context, r *rand.Rand, warn func(key, msg string)) outcome {
 	pr := probes[r.IntN(len(probes))]
 	path := pr.path
 	if pr.name == "click-unknown-code" {
@@ -74,24 +74,26 @@ func (c *client) sendBad(ctx context.Context, r *rand.Rand, warn func(string)) o
 	case err != nil && ctx.Err() != nil:
 		return ok
 	case err != nil:
-		warn(fmt.Sprintf("%s: transport error: %v", pr.name, err))
+		warn(pr.name+"/transport", fmt.Sprintf("%s: transport error: %v", pr.name, err))
 		return fail
 	case status >= 400 && status < 500:
 		return ok
 	}
-	warn(fmt.Sprintf("%s: got HTTP %d, want 4xx", pr.name, status))
+	warn(fmt.Sprintf("%s/%d", pr.name, status), fmt.Sprintf("%s: got HTTP %d, want 4xx", pr.name, status))
 	return fail
 }
 
-// warnOnce prints each distinct finding one time, so a hole does not flood the output.
-func warnOnce(print func(string, ...any)) func(string) {
+// warnOnce prints the first message for each key and drops the rest. Keys are
+// a probe plus an outcome class, never the message itself: messages carry
+// per-request data such as random paths, so they would never repeat.
+func warnOnce(print func(string, ...any)) func(key, msg string) {
 	var mu sync.Mutex
 	seen := map[string]bool{}
-	return func(msg string) {
+	return func(key, msg string) {
 		mu.Lock()
 		defer mu.Unlock()
-		if !seen[msg] {
-			seen[msg] = true
+		if !seen[key] {
+			seen[key] = true
 			print("[bad] %s\n", msg)
 		}
 	}

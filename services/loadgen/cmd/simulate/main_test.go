@@ -20,8 +20,16 @@ import (
 // header matches, like the nginx ingress rule.
 func fakeGateway(t *testing.T) *httptest.Server {
 	t.Helper()
+	return fakeGatewayWith(t, true)
+}
+
+// fakeGatewayWith can break the idempotency contract on purpose, to check the
+// simulator notices.
+func fakeGatewayWith(t *testing.T, idempotent bool) *httptest.Server {
+	t.Helper()
 	var mu sync.Mutex
 	codes := map[string]bool{}
+	byKey := map[string]string{}
 	n := 0
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != "url-shortener.local" {
@@ -38,9 +46,16 @@ func fakeGateway(t *testing.T) *httptest.Server {
 				http.Error(w, "bad request", http.StatusBadRequest)
 				return
 			}
-			n++
-			code := fmt.Sprintf("c%d", n)
-			codes[code] = true
+			dedup := idempotent && req["idempotencyKey"] != ""
+			code, seen := byKey[req["ownerId"]+"/"+req["idempotencyKey"]]
+			if !dedup || !seen {
+				n++
+				code = fmt.Sprintf("c%d", n)
+				codes[code] = true
+				if dedup {
+					byKey[req["ownerId"]+"/"+req["idempotencyKey"]] = code
+				}
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"url": map[string]string{"code": code}})
 		case strings.Contains(r.URL.Path, "Service/"):
 			_, _ = w.Write([]byte(`{}`))
@@ -63,7 +78,8 @@ func TestUsers_DriveEveryActionWithoutErrors(t *testing.T) {
 	defer cancel()
 	p := &pool{now: time.Now}
 	st := &stats{totals: map[action]map[outcome]int{}, started: time.Now()}
-	cr := &crowd{}
+	var warnings []string
+	cr := &crowd{warn: warnOnce(func(f string, a ...any) { warnings = append(warnings, fmt.Sprintf(f, a...)) })}
 	cr.active.Store(8)
 	var wg sync.WaitGroup
 	for i := range 8 {
@@ -78,6 +94,8 @@ func TestUsers_DriveEveryActionWithoutErrors(t *testing.T) {
 	for a, t2 := range st.totals {
 		assert.Zero(t, t2[fail], "action %s had errors", a)
 	}
+	assert.Positive(t, st.totals[actReplay][ok], "replays should run and match")
+	assert.Empty(t, warnings)
 }
 
 func TestPreflight_WrongHostFails(t *testing.T) {
@@ -170,4 +188,36 @@ func TestSendBad_ScoresRejectionsAndWarnsOnHoles(t *testing.T) {
 			assert.LessOrEqual(t, len(warnings), len(probes), "each finding is printed once")
 		}
 	}
+}
+
+// If the shortener stops honouring (owner, key), a replay must fail and warn.
+func TestUsers_ReplayDetectsBrokenIdempotency(t *testing.T) {
+	srv := fakeGatewayWith(t, false)
+	defer srv.Close()
+	c := newClient(srv.URL, "url-shortener.local", time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+
+	var mu sync.Mutex
+	var warnings []string
+	cr := &crowd{warn: warnOnce(func(f string, a ...any) {
+		mu.Lock()
+		warnings = append(warnings, fmt.Sprintf(f, a...))
+		mu.Unlock()
+	})}
+	cr.active.Store(8)
+	st := &stats{totals: map[action]map[outcome]int{}, started: time.Now()}
+	p := &pool{now: time.Now}
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func() { defer wg.Done(); user(ctx, i, c, p, st, cr, time.Millisecond, 42, false) }()
+	}
+	wg.Wait()
+
+	assert.Positive(t, st.totals[actReplay][fail])
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, warnings, 1, "the finding is printed once")
+	assert.Contains(t, warnings[0], "replay of key")
 }

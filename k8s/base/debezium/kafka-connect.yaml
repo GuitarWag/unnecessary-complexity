@@ -70,7 +70,9 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 5
 ---
-# Registers the connector once the shortener has created the outbox publication.
+# Registers the connector once the shortener's migration has added the outbox
+# table to the publication. init.sql creates the publication empty, so checking
+# only that it exists would pass before the shortener runs.
 # PUT is create-or-update. To apply a changed connector config, delete this Job
 # and apply again.
 apiVersion: batch/v1
@@ -97,7 +99,7 @@ spec:
             - -c
             - >-
               until psql -h postgres -U postgres -d shortener -Atc
-              "SELECT 1 FROM pg_publication WHERE pubname = 'shortener_outbox'" | grep -q 1;
+              "SELECT 1 FROM pg_publication_tables WHERE pubname = 'shortener_outbox' AND tablename = 'outbox'" | grep -q 1;
               do sleep 2; done
       containers:
         - name: register

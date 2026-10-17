@@ -241,3 +241,36 @@ func TestConsumer_RetriesFetchAndCommitErrors(t *testing.T) {
 	assert.Equal(t, 1, handled, "a retried commit must not re-run the handler")
 	assert.Equal(t, 4, reported, "two fetch and two commit failures")
 }
+
+// A permanent fault must end Run with an error, so the pod restarts and the
+// fault shows, instead of a Ready pod that consumes nothing.
+func TestConsumer_GivesUpOnPermanentFetchError(t *testing.T) {
+	t.Parallel()
+	r := &fakeReader{fetchErr: errors.New("unknown topic or partition")}
+	c := NewConsumer(r, func() *eventsv1.ShortURLCreated { return &eventsv1.ShortURLCreated{} },
+		func(context.Context, string, *eventsv1.ShortURLCreated) error { return nil })
+	c.giveUp = 300 * time.Millisecond
+
+	err := c.Run(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown topic")
+}
+
+// Shutdown during a commit retry must still try to commit once, or the handled
+// message is redelivered and applied twice.
+func TestConsumer_CommitsOnceMoreAtShutdown(t *testing.T) {
+	t.Parallel()
+	r := &fakeReader{commitFails: 1}
+	r.push(t, "abc", &eventsv1.ShortURLCreated{Code: "abc", LongUrl: "https://a"})
+	c := NewConsumer(r, func() *eventsv1.ShortURLCreated { return &eventsv1.ShortURLCreated{} },
+		func(context.Context, string, *eventsv1.ShortURLCreated) error { return nil })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel as soon as the first commit fails, so the retry ends in shutdown.
+	err := c.Run(ctx, func(error) { cancel() })
+	require.NoError(t, err)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	assert.Len(t, r.committed, 1)
+}

@@ -168,14 +168,19 @@ func (p *pool) add(code string) {
 
 func (p *pool) pick(r *rand.Rand) (string, bool) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	cutoff := p.now().Add(-p.settle)
 	n := sort.Search(len(p.born), func(i int) bool { return p.born[i].After(cutoff) })
+	p.mu.Unlock()
 	if n == 0 {
 		return "", false
 	}
+	// Build the Zipf outside the lock; the pool is append-only, so index n-1-k
+	// is still valid when read under the lock below.
 	z := rand.NewZipf(r, 1.2, 1, uint64(n-1)) //nolint:gosec // n >= 1 here
-	return p.codes[n-1-int(z.Uint64())], true //nolint:gosec // Zipf output is <= n-1
+	k := int(z.Uint64())                      //nolint:gosec // Zipf output is <= n-1
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.codes[n-1-k], true
 }
 
 // newest returns the youngest code that is old enough to click.
@@ -259,7 +264,7 @@ func user(ctx context.Context, id int, c *client, p *pool, st *stats, cr *crowd,
 	r := rand.New(rand.NewPCG(seed, uint64(id))) //nolint:gosec // simulated traffic, not security; id >= 0
 	who := pickPersona(r, chaos)
 	owner := "sim-" + who.name + "-" + strconv.Itoa(id)
-	var lastKey, lastURL string
+	var lastKey, lastURL, lastCode string
 	for ctx.Err() == nil {
 		if int64(id) >= cr.active.Load() {
 			if !sleep(ctx, 250*time.Millisecond) {
@@ -292,8 +297,13 @@ func user(ctx context.Context, id int, c *client, p *pool, st *stats, cr *crowd,
 			if lastKey != "" && r.Float64() < 0.2 {
 				// A double-submit: same owner and key must return the same code.
 				a, o = actReplay, ok
-				if _, err := c.shorten(ctx, lastURL, owner, lastKey); err != nil {
+				got, err := c.shorten(ctx, lastURL, owner, lastKey)
+				switch {
+				case err != nil:
 					o = fail
+				case got != lastCode:
+					o = fail
+					cr.warn("idempotency", fmt.Sprintf("replay of key %s returned %s, want %s", lastKey, got, lastCode))
 				}
 				break
 			}
@@ -308,6 +318,7 @@ func user(ctx context.Context, id int, c *client, p *pool, st *stats, cr *crowd,
 				o = fail
 			} else {
 				p.add(code)
+				lastCode = code
 			}
 		case roll < who.click:
 			if v := cr.viralCode(); v != "" && r.Float64() < 0.7 {

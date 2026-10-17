@@ -15,7 +15,7 @@ type crowd struct {
 	active atomic.Int64
 	viral  atomic.Pointer[string]
 	attack atomic.Bool
-	warn   func(string)
+	warn   func(key, msg string)
 }
 
 func (c *crowd) viralCode() string {

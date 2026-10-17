@@ -2,7 +2,6 @@ package events
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -26,13 +25,14 @@ type Handler[T proto.Message] func(ctx context.Context, key string, msg T) error
 type Consumer[T proto.Message] struct {
 	r       KafkaReader
 	topic   string // for metrics; empty when the reader does not say
+	giveUp  time.Duration
 	newMsg  func() T
 	handler Handler[T]
 }
 
 // NewConsumer wires a reader, a factory for the proto message type, and a handler.
 func NewConsumer[T proto.Message](r KafkaReader, newMsg func() T, handler Handler[T]) *Consumer[T] {
-	c := &Consumer[T]{r: r, newMsg: newMsg, handler: handler}
+	c := &Consumer[T]{r: r, newMsg: newMsg, handler: handler, giveUp: defaultGiveUp}
 	if rc, ok := r.(interface{ Config() kafka.ReaderConfig }); ok {
 		c.topic = rc.Config().Topic
 	}
@@ -43,16 +43,25 @@ func NewConsumer[T proto.Message](r KafkaReader, newMsg func() T, handler Handle
 const (
 	retryMin = 200 * time.Millisecond
 	retryMax = 10 * time.Second
+	// defaultGiveUp ends Run after this long of continuous failure. That is
+	// longer than a broker restart or a laptop wake, and short enough that a
+	// permanent fault (missing topic, bad auth) restarts the pod instead of
+	// leaving it Ready while it consumes nothing.
+	defaultGiveUp = 5 * time.Minute
+	// finalCommitTimeout bounds the one commit attempt made during shutdown.
+	finalCommitTimeout = 5 * time.Second
 )
 
-// Run consumes messages until ctx is cancelled or the handler fails.
+// Run consumes messages until ctx is cancelled, the handler fails, or Kafka
+// stays unreachable for longer than the give-up window.
 //
-// Fetch and commit errors are retried with capped exponential backoff, not
-// returned: a broker restart, a coordinator election or a laptop waking from
-// sleep all produce them, and exiting turned each blip into a crash loop. A
-// commit is retried, never skipped, because a skipped commit redelivers the
-// message and the handler would apply it twice. onErr, if non-nil, sees every
-// retried error and every undecodable (skipped) message.
+// Fetch and commit errors are retried with capped exponential backoff: a broker
+// restart, a coordinator election or a laptop waking from sleep all produce
+// them, and returning on the first one turned each blip into a crash loop. A
+// commit is retried rather than skipped, and makes one last attempt during
+// shutdown, because a skipped commit redelivers the message and the handler
+// would apply it twice. onErr, if non-nil, sees every retried error and every
+// undecodable (skipped) message.
 func (c *Consumer[T]) Run(ctx context.Context, onErr func(error)) error {
 	report := func(err error) {
 		if onErr != nil {
@@ -61,14 +70,18 @@ func (c *Consumer[T]) Run(ctx context.Context, onErr func(error)) error {
 	}
 	for {
 		var msg kafka.Message
-		if !retry(ctx, func() (err error) {
+		err := retry(ctx, c.giveUp, func() (err error) {
 			msg, err = c.r.FetchMessage(ctx)
 			return err
 		}, func(err error) {
 			metrics.ObserveEvent(c.topic, "fetch_error", 0)
 			report(fmt.Errorf("consumer: fetch (retrying): %w", err))
-		}) {
+		})
+		if done(ctx) {
 			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("consumer: fetch: %w", err)
 		}
 
 		decoded := c.newMsg()
@@ -76,7 +89,10 @@ func (c *Consumer[T]) Run(ctx context.Context, onErr func(error)) error {
 			metrics.ObserveEvent(msg.Topic, "decode_error", 0)
 			report(fmt.Errorf("consumer: unmarshal: %w", err))
 			// Skip undecodable messages by committing; they are poison and would block the partition otherwise.
-			if !c.commit(ctx, msg, report) {
+			if err := c.commit(ctx, msg, report); err != nil {
+				return err
+			}
+			if done(ctx) {
 				return nil
 			}
 			continue
@@ -88,35 +104,69 @@ func (c *Consumer[T]) Run(ctx context.Context, onErr func(error)) error {
 			return fmt.Errorf("consumer: handler: %w", err)
 		}
 		metrics.ObserveEvent(msg.Topic, "ok", time.Since(start))
-		if !c.commit(ctx, msg, report) {
+		if err := c.commit(ctx, msg, report); err != nil {
+			return err
+		}
+		if done(ctx) {
 			return nil
 		}
 	}
 }
 
-func (c *Consumer[T]) commit(ctx context.Context, msg kafka.Message, report func(error)) bool {
-	return retry(ctx, func() error { return c.r.CommitMessages(ctx, msg) }, func(err error) {
-		report(fmt.Errorf("consumer: commit (retrying): %w", err))
-	})
+// done reports whether ctx is cancelled: a clean shutdown, not an error.
+func done(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
 }
 
-// retry runs op until it succeeds or ctx ends, waiting retryMin, doubling up
-// to retryMax, between attempts. It reports each failure and returns false
-// only when ctx ended.
-func retry(ctx context.Context, op func() error, onFail func(error)) bool {
+// commit retries until it succeeds, gives up, or ctx ends. If ctx ends first,
+// it makes one last attempt on a fresh deadline, because the handler has
+// already applied this message.
+func (c *Consumer[T]) commit(ctx context.Context, msg kafka.Message, report func(error)) error {
+	err := retry(ctx, c.giveUp, func() error { return c.r.CommitMessages(ctx, msg) }, func(err error) {
+		report(fmt.Errorf("consumer: commit (retrying): %w", err))
+	})
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() == nil {
+		return fmt.Errorf("consumer: commit: %w", err)
+	}
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalCommitTimeout)
+	defer cancel()
+	if ferr := c.r.CommitMessages(fctx, msg); ferr != nil {
+		report(fmt.Errorf("consumer: final commit at shutdown failed, message will be redelivered: %w", ferr))
+	}
+	return nil
+}
+
+// retry runs op until it succeeds, ctx ends, or op has failed without a break
+// for giveUp. Between attempts it waits retryMin, doubling up to retryMax. It
+// returns nil on success, ctx.Err() when ctx ended, and the last error when it
+// gave up. Only the caller's ctx counts as shutdown: an op error that merely
+// wraps a deadline of its own is retried like any other.
+func retry(ctx context.Context, giveUp time.Duration, op func() error, onFail func(error)) error {
 	wait := retryMin
+	start := time.Now()
 	for {
 		err := op()
 		if err == nil {
-			return true
+			return nil
 		}
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return false
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Since(start) >= giveUp {
+			return err
 		}
 		onFail(err)
 		select {
 		case <-ctx.Done():
-			return false
+			return ctx.Err()
 		case <-time.After(wait):
 		}
 		wait = min(wait*2, retryMax)

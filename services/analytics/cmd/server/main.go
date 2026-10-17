@@ -114,8 +114,11 @@ func run() error {
 		return fmt.Errorf("listen %s: %w", cfg.addr, err)
 	}
 
-	consumerErr := make(chan error, 1)
+	// Stays nil when the consumer is off: a nil channel blocks forever in the
+	// select below, where a closed one would read as a clean exit.
+	var consumerErr chan error
 	if len(cfg.kafkaBrokers) > 0 {
+		consumerErr = make(chan error, 1)
 		startOffset := kafka.FirstOffset
 		if cfg.consumerStart == "last" {
 			startOffset = kafka.LastOffset
@@ -138,7 +141,6 @@ func run() error {
 		}()
 	} else {
 		logger.Warn("ANALYTICS_KAFKA_BROKERS unset; click events will not be consumed")
-		close(consumerErr)
 	}
 
 	serveErr := make(chan error, 1)

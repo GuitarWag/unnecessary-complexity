@@ -113,6 +113,7 @@ Six pnpm-workspace apps in `frontend/apps/`. `shell` is the host; the five `mf-*
 
 - k8s reads the Postgres password only from the Secret `postgres-credentials`. ESO syncs it from Vault at `secret/url-shortener/postgres`, through `k8s/base/secrets/secrets.yaml`. Never put a credential literal in a manifest; add it to Vault and to the `ExternalSecret`.
 - `make secrets-up` installs ESO (Helm chart `ESO_CHART_VERSION`), applies Vault from `k8s/secrets`, and runs `scripts/vault-bootstrap.sh`. It must run before `k8s-apply`, because Postgres needs the Secret at initdb. The bootstrap is idempotent. Vault is the source of truth: if `postgres-0` exists, the script sets its password to match Vault.
+- Do not change the password in Vault by hand: Postgres keeps the old one, because it reads `POSTGRES_PASSWORD` only at initdb. `scripts/vault-bootstrap.sh` sets Vault and Postgres together.
 - Vault runs in dev mode, in memory, with root token `root`. This is local kind only. After a Vault restart, run `make secrets-up` again. It restores the password from the synced Secret, so nothing changes.
 - The connector JSON says `${env:PGPASSWORD}`, and both the k8s and the compose Kafka Connect set `CONNECT_CONFIG_PROVIDERS=env`. A changed password needs a Kafka Connect restart, because the provider reads the value when the task starts.
 - Tilt dev keeps the fixed password `postgres` in `compose.yaml` and the Tiltfile, because it is local only.
